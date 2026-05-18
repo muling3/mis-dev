@@ -71,9 +71,17 @@ help:                  ## Show this help
 install:               ## Install deps for this package (standalone)
 	npm install
 
-auth:                  ## Authenticate npm to the @mis Azure Artifacts feed
+auth:                  ## Authenticate npm to the @mis Azure feed (cross-platform)
 	@test -f .npmrc || { echo "no .npmrc — cp .npmrc.example .npmrc and set <org>/<project>/<feed>"; exit 1; }
-	npx -y vsts-npm-auth -config .npmrc
+	@if [ -n "\$\${AZURE_NPM_TOKEN:-}" ]; then \\
+	  echo "auth: AZURE_NPM_TOKEN set — npm reads it from .npmrc (no action needed)"; \\
+	elif uname -s 2>/dev/null | grep -qiE 'mingw|msys|cygwin|windows'; then \\
+	  vsts-npm-auth -config .npmrc; \\
+	else \\
+	  echo "auth: no credentials. Linux/macOS/CI:  export AZURE_NPM_TOKEN=<base64 Azure PAT>"; \\
+	  echo "      Windows: install vsts-npm-auth, then re-run 'make auth'"; \\
+	  exit 1; \\
+	fi
 
 build:                 ## Compile TS to dist/
 	rm -rf dist && npx tsc -p tsconfig.json
@@ -95,23 +103,23 @@ clean:                 ## Remove artefacts
 MK
 
   cat > "$repo/.npmrc.example" <<'NPMRC'
-; Azure Artifacts npm registry for @mis/* packages.
-; 1) Replace <org>, <project>, <feed> with your Azure DevOps values.
-; 2) cp .npmrc.example .npmrc   (the real .npmrc is gitignored)
-; 3) Authenticate:  make auth                 (dev — vsts-npm-auth)
-;    or for CI: export AZURE_NPM_TOKEN=<base64 PAT> and uncomment token lines.
-; 4) Services:  make install-azure   |   Packages:  make publish
+; Azure Artifacts npm registry for @mis/* packages. Cross-platform setup:
+;   1) cp .npmrc.example .npmrc   and replace <org>/<project>/<feed> below
+;   2) Linux/macOS/CI: export AZURE_NPM_TOKEN=<base64-encoded Azure PAT>
+;      Windows:        run `make auth` (uses vsts-npm-auth)
+;   3) services: make install-azure   |   packages: make publish
+; npm expands ${AZURE_NPM_TOKEN} from the environment at run time; the real
+; .npmrc is gitignored so no secret is ever committed.
 
 @mis:registry=https://pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/
 always-auth=true
 
-; --- CI / token auth (uncomment; AZURE_NPM_TOKEN = base64-encoded PAT) ---
-; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:username=<org>
-; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:_password=${AZURE_NPM_TOKEN}
-; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:email=npm@mis.local
-; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:username=<org>
-; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:_password=${AZURE_NPM_TOKEN}
-; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:email=npm@mis.local
+//pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:username=mis
+//pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:_password=${AZURE_NPM_TOKEN}
+//pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:email=npm@mis.local
+//pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:username=mis
+//pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:_password=${AZURE_NPM_TOKEN}
+//pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:email=npm@mis.local
 NPMRC
 
   # Each folder is its own git repo (teams pull a single repo), so it needs
@@ -484,23 +492,23 @@ dist/
 IGN
 
   cat > "$repo/.npmrc.example" <<'NPMRC'
-; Azure Artifacts npm registry for @mis/* packages.
-; 1) Replace <org>, <project>, <feed> with your Azure DevOps values.
-; 2) cp .npmrc.example .npmrc   (the real .npmrc is gitignored)
-; 3) Authenticate:  make auth                 (dev — vsts-npm-auth)
-;    or for CI: export AZURE_NPM_TOKEN=<base64 PAT> and uncomment token lines.
-; 4) Services:  make install-azure   |   Packages:  make publish
+; Azure Artifacts npm registry for @mis/* packages. Cross-platform setup:
+;   1) cp .npmrc.example .npmrc   and replace <org>/<project>/<feed> below
+;   2) Linux/macOS/CI: export AZURE_NPM_TOKEN=<base64-encoded Azure PAT>
+;      Windows:        run `make auth` (uses vsts-npm-auth)
+;   3) services: make install-azure   |   packages: make publish
+; npm expands ${AZURE_NPM_TOKEN} from the environment at run time; the real
+; .npmrc is gitignored so no secret is ever committed.
 
 @mis:registry=https://pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/
 always-auth=true
 
-; --- CI / token auth (uncomment; AZURE_NPM_TOKEN = base64-encoded PAT) ---
-; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:username=<org>
-; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:_password=${AZURE_NPM_TOKEN}
-; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:email=npm@mis.local
-; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:username=<org>
-; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:_password=${AZURE_NPM_TOKEN}
-; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:email=npm@mis.local
+//pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:username=mis
+//pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:_password=${AZURE_NPM_TOKEN}
+//pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:email=npm@mis.local
+//pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:username=mis
+//pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:_password=${AZURE_NPM_TOKEN}
+//pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:email=npm@mis.local
 NPMRC
 
   cat > "$repo/src/main.ts" <<TS
@@ -612,9 +620,17 @@ install-standalone:    ## Install deps + @mis/* from GitHub (no package.json edi
 	  git+ssh://git@github.com/muling3/mis-pkg-circuit-breaker.git \\
 	  git+ssh://git@github.com/muling3/mis-proto.git
 
-auth:                  ## Authenticate npm to the @mis Azure Artifacts feed
+auth:                  ## Authenticate npm to the @mis Azure feed (cross-platform)
 	@test -f .npmrc || { echo "no .npmrc — cp .npmrc.example .npmrc and set <org>/<project>/<feed>"; exit 1; }
-	npx -y vsts-npm-auth -config .npmrc
+	@if [ -n "\$\${AZURE_NPM_TOKEN:-}" ]; then \\
+	  echo "auth: AZURE_NPM_TOKEN set — npm reads it from .npmrc (no action needed)"; \\
+	elif uname -s 2>/dev/null | grep -qiE 'mingw|msys|cygwin|windows'; then \\
+	  vsts-npm-auth -config .npmrc; \\
+	else \\
+	  echo "auth: no credentials. Linux/macOS/CI:  export AZURE_NPM_TOKEN=<base64 Azure PAT>"; \\
+	  echo "      Windows: install vsts-npm-auth, then re-run 'make auth'"; \\
+	  exit 1; \\
+	fi
 
 install-azure: auth    ## Install @mis/* from the Azure Artifacts feed (.npmrc)
 	npm install
