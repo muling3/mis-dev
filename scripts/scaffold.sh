@@ -63,7 +63,7 @@ JSON
   cat > "$repo/Makefile" <<MK
 PACKAGE := $pkg
 
-.PHONY: help install auth build test lint pack clean
+.PHONY: help install auth build test lint pack publish clean
 
 help:                  ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-16s %s\n", \$\$1, \$\$2}' \$(MAKEFILE_LIST)
@@ -71,8 +71,9 @@ help:                  ## Show this help
 install:               ## Install deps for this package (standalone)
 	npm install
 
-auth:                  ## No-op in PoC (no Azure Artifacts feed)
-	@echo "auth: skipped — PoC uses npm workspaces, not Azure Artifacts"
+auth:                  ## Authenticate npm to the @mis Azure Artifacts feed
+	@test -f .npmrc || { echo "no .npmrc — cp .npmrc.example .npmrc and set <org>/<project>/<feed>"; exit 1; }
+	npx -y vsts-npm-auth -config .npmrc
 
 build:                 ## Compile TS to dist/
 	rm -rf dist && npx tsc -p tsconfig.json
@@ -86,9 +87,32 @@ lint:                  ## Lint (stub)
 pack:                  ## Build then npm pack
 	\$(MAKE) build && npm pack
 
+publish: auth build    ## Publish this package to the @mis Azure Artifacts feed
+	npm publish
+
 clean:                 ## Remove artefacts
 	rm -rf dist node_modules *.tgz
 MK
+
+  cat > "$repo/.npmrc.example" <<'NPMRC'
+; Azure Artifacts npm registry for @mis/* packages.
+; 1) Replace <org>, <project>, <feed> with your Azure DevOps values.
+; 2) cp .npmrc.example .npmrc   (the real .npmrc is gitignored)
+; 3) Authenticate:  make auth                 (dev — vsts-npm-auth)
+;    or for CI: export AZURE_NPM_TOKEN=<base64 PAT> and uncomment token lines.
+; 4) Services:  make install-azure   |   Packages:  make publish
+
+@mis:registry=https://pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/
+always-auth=true
+
+; --- CI / token auth (uncomment; AZURE_NPM_TOKEN = base64-encoded PAT) ---
+; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:username=<org>
+; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:_password=${AZURE_NPM_TOKEN}
+; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:email=npm@mis.local
+; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:username=<org>
+; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:_password=${AZURE_NPM_TOKEN}
+; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:email=npm@mis.local
+NPMRC
 
   # Each folder is its own git repo (teams pull a single repo), so it needs
   # its own .gitignore. Never track build output / incremental caches.
@@ -98,6 +122,7 @@ dist/
 *.tsbuildinfo
 .env
 .env.local
+.npmrc
 *.log
 IGN
 
@@ -454,8 +479,29 @@ dist/
 *.tsbuildinfo
 .env
 .env.local
+.npmrc
 *.log
 IGN
+
+  cat > "$repo/.npmrc.example" <<'NPMRC'
+; Azure Artifacts npm registry for @mis/* packages.
+; 1) Replace <org>, <project>, <feed> with your Azure DevOps values.
+; 2) cp .npmrc.example .npmrc   (the real .npmrc is gitignored)
+; 3) Authenticate:  make auth                 (dev — vsts-npm-auth)
+;    or for CI: export AZURE_NPM_TOKEN=<base64 PAT> and uncomment token lines.
+; 4) Services:  make install-azure   |   Packages:  make publish
+
+@mis:registry=https://pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/
+always-auth=true
+
+; --- CI / token auth (uncomment; AZURE_NPM_TOKEN = base64-encoded PAT) ---
+; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:username=<org>
+; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:_password=${AZURE_NPM_TOKEN}
+; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/:email=npm@mis.local
+; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:username=<org>
+; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:_password=${AZURE_NPM_TOKEN}
+; //pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/:email=npm@mis.local
+NPMRC
 
   cat > "$repo/src/main.ts" <<TS
 import { NestFactory } from '@nestjs/core';
@@ -545,7 +591,7 @@ SERVICE := ${domain}-service
 IMAGE   := mis/\$(SERVICE)
 TAG     ?= dev
 
-.PHONY: help install install-standalone auth dev build start test lint typecheck \\
+.PHONY: help install install-standalone install-azure auth dev build start test lint typecheck \\
         prisma-generate prisma-migrate prisma-deploy seed \\
         docker-build clean
 
@@ -566,8 +612,12 @@ install-standalone:    ## Install deps + @mis/* from GitHub (no package.json edi
 	  git+ssh://git@github.com/muling3/mis-pkg-circuit-breaker.git \\
 	  git+ssh://git@github.com/muling3/mis-proto.git
 
-auth:                  ## No-op in PoC (no Azure Artifacts feed)
-	@echo "auth: skipped — PoC uses npm workspaces"
+auth:                  ## Authenticate npm to the @mis Azure Artifacts feed
+	@test -f .npmrc || { echo "no .npmrc — cp .npmrc.example .npmrc and set <org>/<project>/<feed>"; exit 1; }
+	npx -y vsts-npm-auth -config .npmrc
+
+install-azure: auth    ## Install @mis/* from the Azure Artifacts feed (.npmrc)
+	npm install
 
 dev:                   ## Run in watch mode
 	npm run start:dev
