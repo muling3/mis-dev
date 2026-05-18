@@ -1,0 +1,8 @@
+mis-auth-service
+mis-registration-service
+mis-case-service
+mis-sandbox-service
+mis-notification-service
+mis-reporting-service
+mis-document-service
+mis-admin-service

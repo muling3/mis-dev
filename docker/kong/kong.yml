@@ -1,0 +1,156 @@
+# Kong declarative config (DB-less).
+#
+# strip_path is OFF everywhere: each NestJS service owns its real
+# /api/<domain> path (app.setGlobalPrefix), so Kong just forwards the path
+# unchanged. That makes WHITELISTING trivial:
+#
+#   • <svc>      route  -> path /api/<domain>            + jwt plugin   (protected)
+#   • <svc>-public route -> specific paths, NO jwt plugin              (whitelisted)
+#
+# Kong matches the most specific (longest) path first, so the *-public
+# paths win over the prefix route and skip auth. To whitelist a new
+# endpoint, add its full path to that service's `<svc>-public` route.
+# (Public here = health/ready probes + the auth login endpoint.)
+#
+# Cross-cutting concerns stay at the gateway:
+#   correlation-id · prometheus (:8100/metrics) · rate-limiting · jwt
+# Services use @mis/auth-middleware (read identity) + @mis/access-control
+# (authZ) internally — Kong proves WHO, services decide WHAT.
+_format_version: "3.0"
+
+plugins:
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-ID
+      generator: uuid#counter
+      echo_downstream: true
+  - name: prometheus
+    config:
+      status_code_metrics: true
+      latency_metrics: true
+      bandwidth_metrics: true
+  - name: rate-limiting
+    config:
+      minute: 120
+      policy: local
+      limit_by: ip
+      fault_tolerant: true
+
+# Consumer + HS256 credential. `key` must equal the token's `iss` claim;
+# `secret` must match mis-auth-service's JWT_SECRET / scripts/mint-token.sh.
+# (jwt_secrets.secret is not vault-referenceable — fine for a PoC dev secret;
+# wire a real secret store before anything non-local.)
+consumers:
+  - username: mis-internal
+    jwt_secrets:
+      - key: mis-auth
+        algorithm: HS256
+        secret: "mis-poc-dev-secret-change-me"
+
+services:
+  - name: auth
+    url: http://host.docker.internal:3001
+    routes:
+      # Whitelisted: login (issues tokens) + probes — no jwt.
+      - name: auth-public
+        strip_path: false
+        paths:
+          - /api/auth/login
+          - /api/auth/health
+          - /api/auth/ready
+      - name: auth
+        strip_path: false
+        paths: ["/api/auth"]
+        plugins:
+          # Anchor defined once; aliased (*jwt) by every other service.
+          - &jwt
+            name: jwt
+            config:
+              key_claim_name: iss
+              claims_to_verify:
+                - exp
+              run_on_preflight: true
+
+  - name: registration
+    url: http://host.docker.internal:3002
+    routes:
+      - name: registration-public
+        strip_path: false
+        paths: ["/api/registration/health", "/api/registration/ready"]
+      - name: registration
+        strip_path: false
+        paths: ["/api/registration"]
+        plugins:
+          - *jwt
+
+  - name: case
+    url: http://host.docker.internal:3003
+    routes:
+      - name: case-public
+        strip_path: false
+        paths: ["/api/cases/health", "/api/cases/ready"]
+      - name: case
+        strip_path: false
+        paths: ["/api/cases"]
+        plugins:
+          - *jwt
+
+  - name: sandbox
+    url: http://host.docker.internal:3004
+    routes:
+      - name: sandbox-public
+        strip_path: false
+        paths: ["/api/sandbox/health", "/api/sandbox/ready"]
+      - name: sandbox
+        strip_path: false
+        paths: ["/api/sandbox"]
+        plugins:
+          - *jwt
+
+  - name: notification
+    url: http://host.docker.internal:3005
+    routes:
+      - name: notification-public
+        strip_path: false
+        paths: ["/api/notifications/health", "/api/notifications/ready"]
+      - name: notification
+        strip_path: false
+        paths: ["/api/notifications"]
+        plugins:
+          - *jwt
+
+  - name: reporting
+    url: http://host.docker.internal:3006
+    routes:
+      - name: reporting-public
+        strip_path: false
+        paths: ["/api/reporting/health", "/api/reporting/ready"]
+      - name: reporting
+        strip_path: false
+        paths: ["/api/reporting"]
+        plugins:
+          - *jwt
+
+  - name: document
+    url: http://host.docker.internal:3007
+    routes:
+      - name: document-public
+        strip_path: false
+        paths: ["/api/documents/health", "/api/documents/ready"]
+      - name: document
+        strip_path: false
+        paths: ["/api/documents"]
+        plugins:
+          - *jwt
+
+  - name: admin
+    url: http://host.docker.internal:3008
+    routes:
+      - name: admin-public
+        strip_path: false
+        paths: ["/api/admin/health", "/api/admin/ready"]
+      - name: admin
+        strip_path: false
+        paths: ["/api/admin"]
+        plugins:
+          - *jwt

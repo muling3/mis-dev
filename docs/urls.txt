@@ -1,0 +1,25 @@
+MIS PoC — local URLs cheat-sheet
+(printed by `make urls`)
+
+Service URLs (direct on host port + via Kong proxy on :8000):
+  Auth          http://localhost:3001/health    http://localhost:8000/api/auth/health
+  Registration  http://localhost:3002/health    http://localhost:8000/api/registration/health
+  Case          http://localhost:3003/health    http://localhost:8000/api/cases/health
+  Sandbox       http://localhost:3004/health    http://localhost:8000/api/sandbox/health
+  Notification  http://localhost:3005/health    http://localhost:8000/api/notifications/health
+  Reporting     http://localhost:3006/health    http://localhost:8000/api/reporting/health
+  Document      http://localhost:3007/health    http://localhost:8000/api/documents/health
+  Admin         http://localhost:3008/health    http://localhost:8000/api/admin/health
+
+Infra UIs / endpoints:
+  Kong proxy    http://localhost:8000
+  Kong admin    http://localhost:8001
+  Postgres      localhost:5432   (user mis / pass mis, db mis_dev)
+  Mongo         localhost:27017  (replica set rs0)
+  Redis         localhost:6379
+  Kafka         localhost:29092  (PLAINTEXT_HOST listener)
+
+Notes:
+  - Services run on the host (`make dev s=<domain>`); Kong reaches them
+    via host.docker.internal (host-gateway mapping in docker-compose.yml).
+  - strip_path is on, so /api/auth/health -> :3001/health.

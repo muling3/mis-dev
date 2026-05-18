@@ -1,0 +1,92 @@
+# The 8 NestJS services, containerised.
+#
+# Two workflows, one file:
+#   make images-build   -> `docker compose -f services.yml build`  (build from local code)
+#   make services-up     -> `docker compose -f services.yml up -d`  (run existing images)
+#
+# Separate Compose project (mis-services) from the infra stack (mis-dev) so
+# they have independent lifecycles. Each service publishes its host port, so
+# Kong's existing `host.docker.internal:300x` upstreams keep working with
+# NO kong.yml change and NO Kong restart.
+#
+# Image refs come from docker/.env (see docker/.env.example) so tags/registry
+# are never hardcoded; the `:-default` keeps it working without an env file.
+name: mis-services
+
+x-svc: &svc
+  restart: unless-stopped
+  environment:
+    NODE_ENV: production
+
+services:
+  auth:
+    <<: *svc
+    image: ${AUTH_IMAGE:-mis/auth-service:dev}
+    build:
+      context: ../..
+      dockerfile: mis-auth-service/Dockerfile
+    environment: { NODE_ENV: production, PORT: "3001" }
+    ports: ["3001:3001"]
+
+  registration:
+    <<: *svc
+    image: ${REGISTRATION_IMAGE:-mis/registration-service:dev}
+    build:
+      context: ../..
+      dockerfile: mis-registration-service/Dockerfile
+    environment: { NODE_ENV: production, PORT: "3002" }
+    ports: ["3002:3002"]
+
+  case:
+    <<: *svc
+    image: ${CASE_IMAGE:-mis/case-service:dev}
+    build:
+      context: ../..
+      dockerfile: mis-case-service/Dockerfile
+    environment: { NODE_ENV: production, PORT: "3003" }
+    ports: ["3003:3003"]
+
+  sandbox:
+    <<: *svc
+    image: ${SANDBOX_IMAGE:-mis/sandbox-service:dev}
+    build:
+      context: ../..
+      dockerfile: mis-sandbox-service/Dockerfile
+    environment: { NODE_ENV: production, PORT: "3004" }
+    ports: ["3004:3004"]
+
+  notification:
+    <<: *svc
+    image: ${NOTIFICATION_IMAGE:-mis/notification-service:dev}
+    build:
+      context: ../..
+      dockerfile: mis-notification-service/Dockerfile
+    environment: { NODE_ENV: production, PORT: "3005" }
+    ports: ["3005:3005"]
+
+  reporting:
+    <<: *svc
+    image: ${REPORTING_IMAGE:-mis/reporting-service:dev}
+    build:
+      context: ../..
+      dockerfile: mis-reporting-service/Dockerfile
+    environment: { NODE_ENV: production, PORT: "3006" }
+    ports: ["3006:3006"]
+
+  document:
+    <<: *svc
+    image: ${DOCUMENT_IMAGE:-mis/document-service:dev}
+    build:
+      context: ../..
+      dockerfile: mis-document-service/Dockerfile
+    environment: { NODE_ENV: production, PORT: "3007" }
+    ports: ["3007:3007"]
+
+  admin:
+    <<: *svc
+    image: ${ADMIN_IMAGE:-mis/admin-service:dev}
+    build:
+      context: ../..
+      dockerfile: mis-admin-service/Dockerfile
+    environment: { NODE_ENV: production, PORT: "3008" }
+    ports: ["3008:3008"]
