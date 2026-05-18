@@ -473,6 +473,7 @@ LOG_LEVEL=debug
 ENV
 
   cat > "$repo/.dockerignore" <<'IGN'
+.git
 node_modules
 dist
 .env
@@ -665,8 +666,10 @@ prisma-deploy:         ## STUB
 seed:                  ## STUB
 	@echo "seed: TODO for \$(SERVICE)"
 
-docker-build:          ## Build Docker image
-	docker build -t \$(IMAGE):\$(TAG) ..  -f Dockerfile
+docker-build:          ## Build Docker image (needs configured .npmrc + AZURE_NPM_TOKEN)
+	@test -f .npmrc || { echo "cp .npmrc.example .npmrc and set <org>/<project>/<feed>"; exit 1; }
+	@test -n "\$\${AZURE_NPM_TOKEN:-}" || { echo "export AZURE_NPM_TOKEN=<base64 Azure PAT> first"; exit 1; }
+	DOCKER_BUILDKIT=1 docker build --secret id=azure_npm_token,env=AZURE_NPM_TOKEN -t \$(IMAGE):\$(TAG) .
 
 clean:                 ## Remove build artefacts
 	rm -rf dist node_modules
@@ -674,24 +677,33 @@ MK
 
   # Dockerfile builds from the monorepo root so workspace deps resolve.
   cat > "$repo/Dockerfile" <<DOCKER
-# Build context = monorepo root (workspace deps live there).
-#   docker build -t mis/${domain}-service:dev -f mis-${domain}-service/Dockerfile .
-FROM node:20-alpine AS builder
+# syntax=docker/dockerfile:1
+# Standalone build — context is THIS service repo only (no monorepo).
+# @mis/* are pulled from the Azure Artifacts feed; the token is passed as a
+# BuildKit secret so it never lands in an image layer. Requires a configured
+# .npmrc (cp .npmrc.example .npmrc; set <org>/<project>/<feed>) and:
+#   export AZURE_NPM_TOKEN=<base64 Azure PAT>
+#   make docker-build
+# (equiv: DOCKER_BUILDKIT=1 docker build \\
+#   --secret id=azure_npm_token,env=AZURE_NPM_TOKEN -t mis/${domain}-service:dev .)
+FROM node:22-alpine AS builder
 WORKDIR /app
-# Copy the whole workspace; root .dockerignore prunes node_modules/dist
-# so the install inside the image is always clean.
-COPY . .
-RUN npm install --workspaces --include-workspace-root
-RUN npm run build:pkgs
-RUN npm run build --workspace $repo
+COPY package.json package-lock.json* .npmrc ./
+RUN --mount=type=secret,id=azure_npm_token \\
+    AZURE_NPM_TOKEN="\$(cat /run/secrets/azure_npm_token 2>/dev/null)" \\
+    npm install --no-audit --no-fund
+COPY tsconfig.json nest-cli.json ./
+COPY src ./src
+RUN npm run build
 
-FROM node:20-alpine
+FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
-# Workspace deps are symlinked into node_modules, so the whole
-# tree (packages included) must ship to runtime.
-COPY --from=builder /app ./
-WORKDIR /app/$repo
+COPY package.json package-lock.json* .npmrc ./
+RUN --mount=type=secret,id=azure_npm_token \\
+    AZURE_NPM_TOKEN="\$(cat /run/secrets/azure_npm_token 2>/dev/null)" \\
+    npm install --omit=dev --no-audit --no-fund
+COPY --from=builder /app/dist ./dist
 EXPOSE $port
 CMD ["node", "dist/main.js"]
 DOCKER

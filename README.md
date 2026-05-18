@@ -27,25 +27,56 @@ service repo you're working on.
 ## Quick start
 
 ```bash
-# 1. infra + Kong (once; auto-creates Kafka topics)
 git clone git@github.com:muling3/mis-dev.git && cd mis-dev
-make infra-up
-make urls            # cheat-sheet of every URL/port
 
-# 2. the service you work on — its OWN repo, its OWN Makefile
-cd ..
-git clone git@github.com:muling3/mis-auth-svc.git && cd mis-auth-svc
-make install-standalone     # @mis/* from GitHub  (or: make install-azure)
-make dev                    # watch mode → http://localhost:3001
+# Work on ONE service through Kong — clones it next to mis-dev, installs
+# deps, brings up infra+Kong, runs it. No manual steps, no errors.
+make dev s=auth                       # → :3001, via Kong :8000/api/auth/...
 
-# 3. reach it through the gateway (no Kong change needed)
-curl localhost:3001/api/auth/health           # direct
-curl localhost:8000/api/auth/health           # via Kong
+# verify
+curl localhost:8000/api/auth/health   # through the gateway
+make urls                             # every URL/port
 ```
 
-Kong already routes `/api/<domain>` → `http://localhost:<port>` on the host,
-so any service started on its port is reachable through the gateway. A domain
-whose service isn't running returns `502` from Kong.
+`make dev s=<domain>` is the one-command path: it `git clone`s the service
+repo into `../` if missing, runs its `install-standalone`, ensures
+infra+Kong, then starts it on its port. Kong already routes
+`/api/<domain>` → `http://localhost:<port>`, so it's reachable through the
+gateway with no Kong change. A domain whose service isn't running → `502`.
+
+Manual equivalent (if you prefer to drive the service repo yourself):
+
+```bash
+make infra-up                                   # infra + Kong, once
+cd .. && git clone git@github.com:muling3/mis-auth-svc.git && cd mis-auth-svc
+make install-standalone                          # @mis/* from GitHub (or install-azure)
+make dev                                         # watch mode → :3001
+```
+
+### Lead dev — full local environment
+
+```bash
+make clone-all          # clone every service + package repo into ../
+make up-all             # infra + every cloned service (background)
+make down-all           # stop all services + infra
+```
+
+`clone-all` honours `REPO_URLS="git@…/a.git,git@…/b.git"` (comma-separated)
+to clone a custom subset; the default is every repo in `repos.txt` except
+`mis-dev`. `up-all` builds & runs each cloned service in the background
+(logs in `/tmp/mis-<domain>.log`).
+
+### Building a service image (standalone)
+
+Each service's `Dockerfile` is **standalone** (context = that repo only). It
+pulls `@mis/*` from the Azure feed using a BuildKit secret so the token never
+enters a layer. In the service repo:
+
+```bash
+cp .npmrc.example .npmrc                         # set <org>/<project>/<feed>
+export AZURE_NPM_TOKEN="$(printf %s '<PAT>' | base64 | tr -d '\n')"
+make docker-build                                # → mis/<svc>:dev
+```
 
 ## The model
 
