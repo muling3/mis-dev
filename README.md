@@ -256,6 +256,63 @@ with `make kong-reload` (DB-less hot reload, no restart).
 
 Kong uses `host.docker.internal` to reach services running on the host. On Linux that hostname is mapped via `extra_hosts: host-gateway`. If you run services inside Compose too, replace `host.docker.internal` with the service name in `docker/kong/kong.yml`.
 
+## Shared packages — install modes & the Azure Artifacts feed
+
+The 7 `@mis/*` packages + `mis-proto` are consumed three ways. Each service
+& package repo is independent (own git remote, own `.gitignore`, self-contained
+`tsconfig.json`), so the right mode depends on where you're working:
+
+| Mode | When | Command | `@mis/*` resolves via |
+|------|------|---------|------------------------|
+| Workspaces | monorepo checkout (fast local dev) | `npm install` at root | npm workspaces (`"*"`) |
+| Git URLs | standalone clone, no feed yet | `make install-standalone` | `git+ssh://…/mis-pkg-*.git` (no `package.json` edit) |
+| **Azure feed** | standalone / CI, production path | `make install-azure` | private npm registry |
+
+### One-time: create the feed
+
+Azure DevOps → project → **Artifacts** → **Create Feed** (e.g. `mis-npm`).
+**Connect to feed → npm** shows the registry URL:
+`https://pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/`.
+
+### Per repo: configure `.npmrc`
+
+Every service & package repo ships a tracked `.npmrc.example`; the real
+`.npmrc` is git-ignored (never commits a token):
+
+```bash
+cp .npmrc.example .npmrc        # then replace <org>/<project>/<feed>
+```
+
+### Authenticate (cross-platform — `make auth`)
+
+`make auth` is OS-aware:
+
+- **Linux / macOS / CI** — export a base64-encoded Azure PAT (Packaging:
+  Read & Write). npm expands `${AZURE_NPM_TOKEN}` straight from `.npmrc`:
+  ```bash
+  export AZURE_NPM_TOKEN="$(printf %s '<your-Azure-PAT>' | base64 | tr -d '\n')"
+  ```
+- **Windows** — `make auth` falls back to `vsts-npm-auth -config .npmrc`.
+- Missing both → `make auth` prints what to do and exits non-zero (so
+  `install-azure` / `publish` stop early).
+
+### Consume (services) & publish (packages)
+
+```bash
+# in a service repo
+make install-azure        # = auth + npm install   (@mis/* from the feed)
+
+# in a package repo
+npm version patch         # feeds reject re-publishing the same version
+make publish              # = auth + build + npm publish  → the feed
+```
+
+> The committed `@mis/*` specifiers are `"*"` (for monorepo workspaces). Once
+> the feed exists, switching them to real ranges (`^0.1.0`) lets a plain
+> `npm install` resolve from the feed with the scoped `.npmrc` — no git URLs,
+> no workspace requirement. This is the production layout the architecture
+> docs describe (`04-shared-packages.md`).
+
 ## Adding real persistence later
 
 Each service Makefile already exposes `prisma-generate`, `prisma-migrate`, `prisma-deploy`, and `seed` targets — they are stubs today. When you drop a `prisma/schema.prisma` into a service, replace the stub with real `npx prisma …` invocations and the root `make prisma-deploy-all` will pick it up automatically.
