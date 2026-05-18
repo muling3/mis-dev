@@ -17,10 +17,10 @@ gen_pkg() {
 {
   "name": "$pkg",
   "version": "0.1.0",
-  "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": ["dist"],
+  "publishConfig": { "access": "restricted" },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepare": "npm run build",
@@ -96,7 +96,7 @@ pack:                  ## Build then npm pack
 	\$(MAKE) build && npm pack
 
 publish: auth build    ## Publish this package to the @mis Azure Artifacts feed
-	npm publish
+	npm publish --no-workspaces
 
 clean:                 ## Remove artefacts
 	rm -rf dist node_modules *.tgz
