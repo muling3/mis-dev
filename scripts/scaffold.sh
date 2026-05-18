@@ -23,6 +23,7 @@ gen_pkg() {
   "files": ["dist"],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
     "clean": "rm -rf dist node_modules"
   },
   "devDependencies": {
@@ -67,8 +68,8 @@ PACKAGE := $pkg
 help:                  ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-16s %s\n", \$\$1, \$\$2}' \$(MAKEFILE_LIST)
 
-install:               ## Install (delegates to workspace root)
-	cd \$(realpath ..) && npm install
+install:               ## Install deps for this package (standalone)
+	npm install
 
 auth:                  ## No-op in PoC (no Azure Artifacts feed)
 	@echo "auth: skipped — PoC uses npm workspaces, not Azure Artifacts"
@@ -551,8 +552,8 @@ TAG     ?= dev
 help:                  ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-18s %s\n", \$\$1, \$\$2}' \$(MAKEFILE_LIST)
 
-install:               ## Install deps (delegates to workspace root)
-	cd \$(realpath ..) && npm install
+install:               ## Install deps for this service (standalone)
+	npm install
 
 auth:                  ## No-op in PoC (no Azure Artifacts feed)
 	@echo "auth: skipped — PoC uses npm workspaces"
