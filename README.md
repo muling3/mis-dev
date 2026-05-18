@@ -1,318 +1,180 @@
-# mis-dev — local orchestration
+# mis-dev — MIS local orchestration
 
-Root Makefile + Docker Compose for the MIS PoC.
+**One git repo per service / package.** `mis-dev` is *not* a monorepo root —
+it provides the shared **infra** (Postgres, Mongo, Redis, Kafka), the **Kong**
+API gateway, the **architecture docs** (`architecture/`), and the **scaffold
+generator**. You clone `mis-dev` once for infra, and separately clone the one
+service repo you're working on.
+
+`make help` lists every target. `make repos` lists every repo + clone URL.
 
 ## Prerequisites
 
-Install / have available before anything else:
-
 | Need | Why | Check |
 |------|-----|-------|
-| Docker Engine + Compose v2 | infra + (optional) service containers | `docker compose version` |
-| Node.js ≥ 20 + npm | workspaces, host-mode dev, building `@mis/*` | `node -v` |
+| Docker Engine + Compose v2 | infra + Kong | `docker compose version` |
+| Node.js ≥ 22 (LTS) + npm | building/running a service | `node -v` |
 | `bash`, `curl`, `openssl` | `mint-token.sh`, verification | `openssl version` |
-| `tmux` *(optional)* | only for `make dev-all` | `tmux -V` |
+| git over SSH to `github.com/muling3` | cloning service/package repos | `ssh -T git@github.com` |
 
-**Free host ports** (a leftover Compose project or stray `node` squatting
-these is the #1 failure — stop it first):
+**Host ports that must be free** (a stray process/Compose project here is the
+#1 failure):
 
-- `3001–3008` — the 8 services
 - `5432 / 27017 / 6379 / 29092` — Postgres / Mongo / Redis / Kafka
 - `8000 / 8001 / 8100` — Kong proxy / admin / status(+metrics)
+- `3001–3008` — a service runs on its own port (see `docs/urls.txt`)
 
-**One-time setup** (from the monorepo root, the parent of `mis-dev/`):
-
-```bash
-npm install            # links the 8 services + 8 @mis/* packages via workspaces
-npm run build:pkgs     # compile @mis/* to dist/ (services import the built output)
-```
-
-All `make` targets below are run from `mis-dev/`. `make help` lists them all.
-
-## TL;DR
+## Quick start
 
 ```bash
-# from the monorepo root
-npm install            # links everything via workspaces
-cd mis-dev
-make infra-up          # bring up Postgres / Mongo / Redis / Kafka / Kong
-make dev s=auth        # run one service (or `make dev-all` for tmux)
-
-curl http://localhost:3001/health
-curl http://localhost:8000/api/auth/health   # same response via Kong
-```
-
-`make help` lists every target.
-
-## How the flow works
-
-Two independent Docker Compose projects + your code:
-
-- **`mis-dev`** — infra: Postgres, Mongo, Redis, Kafka, **Kong**. Started by
-  `make infra-up` (also auto-creates Kafka topics).
-- **`mis-services`** — the 8 NestJS services *as containers* (optional —
-  `docker/services.yml`). Started by `make services-up`. Or skip it and run
-  services on the **host** with `make dev`.
-
-Either way the services publish ports `3001–3008`, and Kong reaches them via
-`host.docker.internal` — so **how** you run the services never requires a
-Kong change.
-
-A request travels:
-
-```
-client ──▶ Kong :8000 ──────────────────────────────────────▶ service :300x
-            │  /api/<domain>                                    │
-            │  ├─ correlation-id : add/propagate X-Correlation-ID
-            │  ├─ rate-limiting  : 120/min per IP → 429 if over
-            │  ├─ jwt            : verify HS256 + exp → 401 if bad/missing
-            │  └─ (auth-public routes skip jwt)                  │
-            │                                                    ▼
-            │                              @mis/auth-middleware reads the
-            │                              forwarded claims + correlation id
-            │                              → req.user / req.correlationId
-            │                              @mis/access-control: can()/hasRole()
-            ▼
-        :8100/metrics  (Prometheus: requests, latency, status codes)
-```
-
-Kong proves **who** the caller is (authN) at the edge; services decide
-**what** they may do (authZ) internally. Health/readiness probes hit the
-service ports directly and bypass the gateway.
-
-### The setup-to-request flow
-
-```bash
-# 0. one-time (monorepo root)
-npm install && npm run build:pkgs
-
-# 1. infra (Kong + datastores + Kafka topics)
-cd mis-dev && make infra-up
-
-# 2. run the services — pick ONE:
-make dev s=auth          # host, watch mode (fast iteration); or `make dev-all`
-#   …or…
-make images-build        # build all 8 images from local code
-make services-up         #   then run them from those images
-
-#   …or the one-shot equivalent of 1+2 (containers):
-make stack-up            # infra (+topics) + all services from existing images
-
-# 3. call through the gateway
-TOKEN=$(./scripts/mint-token.sh)                          # or: make kong-token
-curl localhost:8000/api/auth/login                        # 200 — public route
-curl localhost:8000/api/auth/                             # 401 — needs a token
-curl -H "Authorization: Bearer $TOKEN" localhost:8000/api/auth/   # 200
-
-# 4. observe / stop
-make urls   make kong-metrics                             # cheat-sheet, metrics
-make stack-down            # stop everything   (or infra-down / services-down)
-```
-
-When you change `@mis/*` code: host mode picks it up automatically; container
-mode needs `make images-build` again. When you change `docker/kong/kong.yml`:
-`make kong-reload` (no restart). Details for each path below.
-
-## Running locally
-
-All commands run from `mis-dev/`. Infra runs in Docker; the NestJS
-services run on the host.
-
-```bash
-# 1. one-time: install + build the @mis/* packages (from monorepo root)
-npm install && npm run build:pkgs
-
-# 2. start infra (Postgres/Mongo/Redis/Kafka/Kong + auto-creates Kafka topics)
+# 1. infra + Kong (once; auto-creates Kafka topics)
+git clone git@github.com:muling3/mis-dev.git && cd mis-dev
 make infra-up
+make urls            # cheat-sheet of every URL/port
 
-# 3. start service(s) on the host
-make dev s=auth        # one service in watch mode → :3001
-make dev-all           # all 8 in watch mode (needs tmux)
+# 2. the service you work on — its OWN repo, its OWN Makefile
+cd ..
+git clone git@github.com:muling3/mis-auth-svc.git && cd mis-auth-svc
+make install-standalone     # @mis/* from GitHub  (or: make install-azure)
+make dev                    # watch mode → http://localhost:3001
 
-# 4. verify
-make urls                                  # URL cheat-sheet
-curl localhost:3001/health                 # direct
-curl localhost:8000/api/auth/health        # via Kong proxy
-
-# 5. stop
-make infra-down        # stop infra (volumes kept); Ctrl-C stops `make dev`
+# 3. reach it through the gateway (no Kong change needed)
+curl localhost:3001/api/auth/health           # direct
+curl localhost:8000/api/auth/health           # via Kong
 ```
 
-## Running the services in Docker (instead of on the host)
+Kong already routes `/api/<domain>` → `http://localhost:<port>` on the host,
+so any service started on its port is reachable through the gateway. A domain
+whose service isn't running returns `502` from Kong.
 
-For testing local changes across all services at once — build every image,
-then run from the built images without rebuilding. Defined in
-`docker/services.yml` (a separate `mis-services` Compose project) with image
-refs read from `docker/.env` (copy `docker/.env.example`), so tags/registry
-are never hardcoded.
+## The model
 
-```bash
-make images-build        # build Docker images for ALL 8 services from local code
-make images-build s=auth # …or just one
-
-make services-up         # run ALL services from the EXISTING images (no rebuild)
-make services-up s=auth  # …or just one
-make services-ps         # status   |   make services-logs [s=auth]
-make services-down       # stop & remove the service containers
-
-make stack-up            # one shot: infra (+Kafka topics) + all services
-make stack-down          # stop everything
+```
+mis-dev/            ← clone for infra + Kong + docs (this repo)
+mis-auth-svc/       ← clone the ONE service you work on
+mis-pkg-*/          ← shared @mis/* packages (consumed via Azure feed / git)
 ```
 
-Services publish ports 3001–3008, so Kong's existing upstreams keep working
-— **no `kong.yml` edit and no Kong restart** when you rebuild/redeploy a
-service. The `mis-services` and `mis-dev` (infra) Compose projects have
-independent lifecycles: `services-up/down` never touches Kong or the infra.
+`make repos` prints all of them with clone URLs. Each repo is **independent**:
+own git remote, own `.gitignore`, self-contained `tsconfig.json`
+(`nodenext`/ES2023), and the standard Makefile vocabulary
+(`install`, `install-standalone`, `install-azure`, `auth`, `dev`, `build`,
+`start`, `test`, `lint`, `typecheck`, `docker-build`, `prisma-*`, `clean`;
+packages also `pack`/`publish`).
 
-Workflow when iterating on code: `make images-build [s=…]` then
-`make services-up`. `services-up` won't rebuild (`--no-build`) — if an
-image is missing it errors instead of pulling, so build first.
+`make scaffold` regenerates the *entire* set of repos into the parent
+directory — offline bootstrap / recovery only; normally you clone individually.
 
-`s=` accepts: `auth registration case sandbox notification reporting
-document admin` (ports 3001–3008). Kong returns `502` for a domain whose
-host service isn't running. First `make infra-up` waits up to ~90s for the
-Kafka broker before creating topics — that pause is expected.
+## Infra & Kong
+
+`make infra-up` starts (Docker Compose, project `mis-dev`):
+
+| Component | Port(s) | Notes |
+|-----------|---------|-------|
+| Postgres 16 | 5432 | `mis` / `mis` / db `mis_dev` |
+| Mongo 7 (single-node RS) | 27017 | `rs0` via `mongo-init` |
+| Redis 7 | 6379 | |
+| Zookeeper + Kafka | 29092 (host) | `kafka:9092` in-network; first `infra-up` waits ≤90s for the broker before creating topics |
+| Kong 3.5 (DB-less) | 8000 proxy, 8001 admin, 8100 status | routes `/api/<domain>` → host services |
+
+Kong reaches host services via `host.docker.internal` (Linux: mapped through
+`extra_hosts: host-gateway`). Targets: `infra-up/down/ps/logs`, `reset`
+(down -v + up), `kafka-init`, `kong-reload` (apply `docker/kong/kong.yml`
+edits, no restart), `kong-token`, `kong-metrics`, `urls`.
 
 ## Gateway (Kong) — auth, rate limiting, metrics, correlation id
 
-Cross-cutting concerns are handled at the gateway, not duplicated in every
-service (`docker/kong/kong.yml`):
+Cross-cutting concerns live at the gateway (`docker/kong/kong.yml`), not in
+each service:
 
 | Plugin | Scope | Effect |
 |--------|-------|--------|
-| `jwt` | every `<svc>` route (not `<svc>-public`) | HS256 token + `exp` required; rejected at the edge with 401 |
-| `rate-limiting` | global | 120 req/min per client IP (local policy) |
+| `jwt` | every `<svc>` route (not `<svc>-public`) | HS256 + `exp` required; 401 at the edge |
+| `rate-limiting` | global | 120 req/min per client IP |
 | `prometheus` | global | metrics at `http://localhost:8100/metrics` |
 | `correlation-id` | global | injects/propagates `X-Correlation-ID` (client value passes through) |
 
-### Whitelisting endpoints
+**Whitelisting:** `strip_path` is off — each service owns its real
+`/api/<domain>` path (`app.setGlobalPrefix`). Every service has a `<svc>`
+route (jwt) and a `<svc>-public` route (no jwt). Kong matches the longest
+path first, so public paths win. To whitelist an endpoint, add its full path
+to that service's `<svc>-public` route and `make kong-reload`. Currently
+public: every `…/health` & `…/ready`, plus `/api/auth/login`.
 
-`strip_path` is **off** everywhere — each NestJS service owns its real
-`/api/<domain>` path (`app.setGlobalPrefix`). Every service has two Kong
-routes:
+**Auth/authz split:** Kong proves *who* (authN); services decide *what*
+(authZ) using `@mis/auth-middleware` (`gatewayIdentity()` → `req.user` /
+`req.correlationId`) and `@mis/access-control` (`accessGuard()`, `can()`,
+`permissionsForRoles()` — 5 permissions, 2 roles).
 
-- `<svc>` → path `/api/<domain>`, **has** the `jwt` plugin (protected)
-- `<svc>-public` → specific paths, **no** `jwt` (whitelisted)
+| Role | Permissions |
+|------|-------------|
+| `case-officer` | `case:read` `case:write` `profile:read` |
+| `reporting-analyst` | `reporting:read` `reporting:export` `profile:read` |
 
-Kong matches the longest path first, so `*-public` paths win and skip auth.
-**To whitelist an endpoint, add its full path to that service's
-`<svc>-public` route in `docker/kong/kong.yml`** and `make kong-reload`.
-Currently whitelisted: every `…/health` & `…/ready`, plus `/api/auth/login`.
-
-### Auth & authorization
-
-Services don't re-authenticate. They use `@mis/auth-middleware`
-(`gatewayIdentity()` → `req.user` / `req.correlationId` from the forwarded
-JWT) and `@mis/access-control` (5 permissions, 2 roles, `accessGuard()`,
-`can()`, `permissionsForRoles()`) for **authZ only** — Kong proves *who*,
-each service decides *what* via a required permission.
-
-| Role | Permissions | Can use |
-|------|-------------|---------|
-| `case-officer` | `case:read` `case:write` `profile:read` | Case service |
-| `reporting-analyst` | `reporting:read` `reporting:export` `profile:read` | Reporting service |
-
-Two hardcoded test users (`mis-auth-service/src/users.ts`):
-
-| Login (username or email) | Password | Role |
-|---|---|---|
-| `caseofficer` / `case.officer@mis.local` | `case123` | `case-officer` |
-| `reportanalyst` / `report.analyst@mis.local` | `report123` | `reporting-analyst` |
+Test users in `mis-auth-svc` (`src/users.ts`): `caseofficer` / `case123`,
+`reportanalyst` / `report123` (login by username or email).
 
 ```bash
 G=localhost:8000
-# log in (whitelisted) — returns { access_token, ... }
 TOKEN=$(curl -s -X POST $G/api/auth/login -H 'content-type: application/json' \
   -d '{"usernameOrEmail":"caseofficer","password":"case123"}' \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
 
-curl $G/api/cases/health                                  # 200 — whitelisted
-curl $G/api/cases/                                        # 401 — no token (Kong)
-curl -H "Authorization: Bearer $TOKEN" $G/api/cases/      # 200 — case-officer ok
-curl -H "Authorization: Bearer $TOKEN" $G/api/reporting/  # 403 — wrong permission
-curl -H "Authorization: Bearer $TOKEN" $G/api/cases/me    # roles + permissions
-make kong-metrics                                         # Kong Prometheus counters
+RTOK=$(curl -s -X POST $G/api/auth/login -H 'content-type: application/json' \
+  -d '{"usernameOrEmail":"reportanalyst","password":"report123"}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+
+curl $G/api/cases/health                                 # 200 — whitelisted
+curl $G/api/cases/                                       # 401 — no token
+curl -H "Authorization: Bearer $TOKEN"  $G/api/cases/    # 200 — case-officer ok
+curl -H "Authorization: Bearer $RTOK"   $G/api/cases/    # 403 — lacks case:read
+make kong-metrics                                        # Kong counters
 ```
 
-`make kong-token` still mints a generic admin token (bypasses login) for
-quick checks; `GET /api/<domain>/me` on any service returns the caller's
-identity, roles and resolved permissions.
+`make kong-token` mints a generic admin token for quick checks.
+`requirements.http` (REST Client) exercises the whole matrix.
 
 The signing secret is a throwaway dev value duplicated in `kong.yml` and
 `scripts/mint-token.sh` (`JWT_SECRET`, default `mis-poc-dev-secret-change-me`)
-— Kong's `jwt_secrets.secret` isn't vault-referenceable, so wire a real
-secret store before anything non-local. After editing `kong.yml`, apply it
-with `make kong-reload` (DB-less hot reload, no restart).
+— Kong's `jwt_secrets.secret` isn't vault-referenceable; wire a real secret
+store before anything non-local.
 
-## What's in `docker/`
+## Shared `@mis/*` packages
 
-| Service | Port(s) | Notes |
-|---------|---------|-------|
-| Postgres 16 | 5432 | user/pass/db = `mis` / `mis` / `mis_dev` |
-| Mongo 7 (single-node RS) | 27017 | `rs0` initiated by `mongo-init` |
-| Redis 7 | 6379 | |
-| Zookeeper + Kafka | 29092 (host) | `localhost:29092` from host, `kafka:9092` in-network |
-| Kong 3.5 (DB-less) | 8000 proxy, 8001 admin, 8100 status | routes `/api/<domain>` → host services; jwt/rate-limit/prometheus/correlation-id; `/metrics` on 8100 |
+Two ways a service resolves the 8 `@mis/*` packages (no monorepo workspaces
+anymore — each repo is standalone):
 
-Kong uses `host.docker.internal` to reach services running on the host. On Linux that hostname is mapped via `extra_hosts: host-gateway`. If you run services inside Compose too, replace `host.docker.internal` with the service name in `docker/kong/kong.yml`.
+| Mode | When | Command |
+|------|------|---------|
+| Git URLs | no feed yet | `make install-standalone` (pulls `git+ssh://…/mis-pkg-*.git`, no `package.json` edit) |
+| **Azure feed** | production / CI | `make install-azure` |
 
-## Shared packages — install modes & the Azure Artifacts feed
+**Azure Artifacts feed:**
 
-The 7 `@mis/*` packages + `mis-proto` are consumed three ways. Each service
-& package repo is independent (own git remote, own `.gitignore`, self-contained
-`tsconfig.json`), so the right mode depends on where you're working:
+1. Create the feed once: Azure DevOps → project → **Artifacts → Create Feed**
+   (e.g. `mis-npm`); copy the npm registry URL.
+2. Per repo: `cp .npmrc.example .npmrc` and set `<org>/<project>/<feed>`
+   (real `.npmrc` is git-ignored).
+3. Authenticate with `make auth` (cross-platform):
+   - Linux/macOS/CI: `export AZURE_NPM_TOKEN="$(printf %s '<PAT>' | base64 | tr -d '\n')"` — npm expands `${AZURE_NPM_TOKEN}` from `.npmrc`.
+   - Windows: falls back to `vsts-npm-auth`.
+4. Consume: `make install-azure` (service). Publish: `npm version patch` then
+   `make publish` (package; uses `npm publish --no-workspaces`).
 
-| Mode | When | Command | `@mis/*` resolves via |
-|------|------|---------|------------------------|
-| Workspaces | monorepo checkout (fast local dev) | `npm install` at root | npm workspaces (`"*"`) |
-| Git URLs | standalone clone, no feed yet | `make install-standalone` | `git+ssh://…/mis-pkg-*.git` (no `package.json` edit) |
-| **Azure feed** | standalone / CI, production path | `make install-azure` | private npm registry |
+This is the production layout in `architecture/04-shared-packages.md`. Once
+published, switch a service's `@mis/*` specifiers to real ranges (`^0.1.0`)
+so a plain `npm install` resolves from the feed via the scoped `.npmrc`.
 
-### One-time: create the feed
+## Architecture docs
 
-Azure DevOps → project → **Artifacts** → **Create Feed** (e.g. `mis-npm`).
-**Connect to feed → npm** shows the registry URL:
-`https://pkgs.dev.azure.com/<org>/<project>/_packaging/<feed>/npm/registry/`.
+`architecture/` (chapters `01`–`11` + `schema.dbml`) is the design source of
+truth — service catalogue, comms rules, DB model, security, CI/CD,
+integrations. Start at `architecture/README.md`.
 
-### Per repo: configure `.npmrc`
+## Persistence (later)
 
-Every service & package repo ships a tracked `.npmrc.example`; the real
-`.npmrc` is git-ignored (never commits a token):
-
-```bash
-cp .npmrc.example .npmrc        # then replace <org>/<project>/<feed>
-```
-
-### Authenticate (cross-platform — `make auth`)
-
-`make auth` is OS-aware:
-
-- **Linux / macOS / CI** — export a base64-encoded Azure PAT (Packaging:
-  Read & Write). npm expands `${AZURE_NPM_TOKEN}` straight from `.npmrc`:
-  ```bash
-  export AZURE_NPM_TOKEN="$(printf %s '<your-Azure-PAT>' | base64 | tr -d '\n')"
-  ```
-- **Windows** — `make auth` falls back to `vsts-npm-auth -config .npmrc`.
-- Missing both → `make auth` prints what to do and exits non-zero (so
-  `install-azure` / `publish` stop early).
-
-### Consume (services) & publish (packages)
-
-```bash
-# in a service repo
-make install-azure        # = auth + npm install   (@mis/* from the feed)
-
-# in a package repo
-npm version patch         # feeds reject re-publishing the same version
-make publish              # = auth + build + npm publish  → the feed
-```
-
-> The committed `@mis/*` specifiers are `"*"` (for monorepo workspaces). Once
-> the feed exists, switching them to real ranges (`^0.1.0`) lets a plain
-> `npm install` resolve from the feed with the scoped `.npmrc` — no git URLs,
-> no workspace requirement. This is the production layout the architecture
-> docs describe (`04-shared-packages.md`).
-
-## Adding real persistence later
-
-Each service Makefile already exposes `prisma-generate`, `prisma-migrate`, `prisma-deploy`, and `seed` targets — they are stubs today. When you drop a `prisma/schema.prisma` into a service, replace the stub with real `npx prisma …` invocations and the root `make prisma-deploy-all` will pick it up automatically.
+Each service Makefile already exposes `prisma-generate`, `prisma-migrate`,
+`prisma-deploy`, `seed` (stubs). When a service gains a
+`prisma/schema.prisma`, replace its stub targets with real `npx prisma …`
+calls — run them from that service's own repo against the shared Postgres
+(`localhost:5432`, db `mis_<domain>`).
