@@ -26,17 +26,34 @@ gen_pkg() {
     "clean": "rm -rf dist node_modules"
   },
   "devDependencies": {
+    "@types/node": "^22.10.0",
     "typescript": "^5.4.5"
   }
 }
 JSON
 
+  # Self-contained (no shared base): each repo is independent so teams can
+  # pull a single folder and build it without the monorepo root.
   cat > "$repo/tsconfig.json" <<'JSON'
 {
-  "extends": "../tsconfig.base.json",
   "compilerOptions": {
+    "target": "ES2023",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "declaration": true,
+    "sourceMap": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "resolveJsonModule": true,
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "./src"
   },
   "include": ["src/**/*"]
 }
@@ -71,6 +88,17 @@ pack:                  ## Build then npm pack
 clean:                 ## Remove artefacts
 	rm -rf dist node_modules *.tgz
 MK
+
+  # Each folder is its own git repo (teams pull a single repo), so it needs
+  # its own .gitignore. Never track build output / incremental caches.
+  cat > "$repo/.gitignore" <<'IGN'
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.local
+*.log
+IGN
 
   printf '%s\n' "$body" > "$repo/src/index.ts"
   echo "  pkg  $pkg"
@@ -346,7 +374,7 @@ gen_service() {
   "devDependencies": {
     "@nestjs/cli": "^10.4.5",
     "@nestjs/schematics": "^10.1.4",
-    "@types/node": "^20.14.0",
+    "@types/node": "^22.10.0",
     "typescript": "^5.4.5",
     "ts-node": "^10.9.2",
     "ts-loader": "^9.5.1"
@@ -363,12 +391,27 @@ JSON
 }
 JSON
 
+  # Self-contained (no shared base): each service repo is independent.
   cat > "$repo/tsconfig.json" <<'JSON'
 {
-  "extends": "../tsconfig.base.json",
   "compilerOptions": {
+    "target": "ES2023",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "declaration": true,
+    "sourceMap": true,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "resolveJsonModule": true,
     "outDir": "./dist",
-    "baseUrl": "./",
+    "rootDir": "./src",
     "incremental": true
   },
   "include": ["src/**/*"],
@@ -399,6 +442,17 @@ ENV
 node_modules
 dist
 .env
+*.log
+IGN
+
+  # Each service is its own git repo — needs its own .gitignore. Build
+  # output and *.tsbuildinfo (incremental cache) must never be tracked.
+  cat > "$repo/.gitignore" <<'IGN'
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.local
 *.log
 IGN
 

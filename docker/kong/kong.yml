@@ -119,18 +119,6 @@ services:
         plugins:
           - *jwt
 
-  - name: reporting
-    url: http://host.docker.internal:3006
-    routes:
-      - name: reporting-public
-        strip_path: false
-        paths: ["/api/reporting/health", "/api/reporting/ready"]
-      - name: reporting
-        strip_path: false
-        paths: ["/api/reporting"]
-        plugins:
-          - *jwt
-
   - name: document
     url: http://host.docker.internal:3007
     routes:

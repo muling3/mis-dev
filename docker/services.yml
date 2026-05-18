@@ -64,15 +64,6 @@ services:
     environment: { NODE_ENV: production, PORT: "3005" }
     ports: ["3005:3005"]
 
-  reporting:
-    <<: *svc
-    image: ${REPORTING_IMAGE:-mis/reporting-service:dev}
-    build:
-      context: ../..
-      dockerfile: mis-reporting-service/Dockerfile
-    environment: { NODE_ENV: production, PORT: "3006" }
-    ports: ["3006:3006"]
-
   document:
     <<: *svc
     image: ${DOCUMENT_IMAGE:-mis/document-service:dev}

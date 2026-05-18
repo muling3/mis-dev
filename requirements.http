@@ -2,7 +2,7 @@
 # MIS PoC — requirement tests (VS Code "REST Client" / JetBrains HTTP client)
 #
 # Prereq:  cd mis-dev && make infra-up      (Kong on :8000)
-#          then run the services — host:  make dev s=auth / s=case / s=reporting
+#          then run the services — host:  make dev s=auth / s=case
 #                                  or:     make stack-up   (after make images-build)
 #
 # Run requests top-to-bottom: the login calls are @named and later requests
@@ -22,8 +22,8 @@ GET {{gateway}}/api/auth/health
 ### case health — expect 200
 GET {{gateway}}/api/cases/health
 
-### reporting ready — expect 200
-GET {{gateway}}/api/reporting/ready
+### case ready — expect 200
+GET {{gateway}}/api/cases/ready
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. PROTECTED WITHOUT A TOKEN  (Kong jwt rejects at the edge — expect 401)
@@ -67,22 +67,15 @@ Content-Type: application/json
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. AUTHORIZATION MATRIX  (case-officer vs reporting-analyst)
-#    Requirement: a case user must NOT access the reporting service.
+#    Requirement: a user without the service's required permission is denied.
+#    case-officer has case:read; reporting-analyst does NOT.
 # ─────────────────────────────────────────────────────────────────────────────
 
-### case-officer  ->  CASE service        — expect 200
+### case-officer  ->  CASE service   — expect 200 (has case:read)
 GET {{gateway}}/api/cases/
 Authorization: Bearer {{caseToken}}
 
-### case-officer  ->  REPORTING service    — expect 403 (forbidden)
-GET {{gateway}}/api/reporting/
-Authorization: Bearer {{caseToken}}
-
-### reporting-analyst  ->  REPORTING service — expect 200
-GET {{gateway}}/api/reporting/
-Authorization: Bearer {{reportToken}}
-
-### reporting-analyst  ->  CASE service      — expect 403 (forbidden)
+### reporting-analyst  ->  CASE service — expect 403 (lacks case:read)
 GET {{gateway}}/api/cases/
 Authorization: Bearer {{reportToken}}
 
@@ -99,7 +92,7 @@ GET {{gateway}}/api/auth/me
 Authorization: Bearer {{reportToken}}
 
 ### cross-service introspection is allowed (still token-gated) — expect 200
-GET {{gateway}}/api/reporting/me
+GET {{gateway}}/api/auth/me
 Authorization: Bearer {{caseToken}}
 
 # ─────────────────────────────────────────────────────────────────────────────
