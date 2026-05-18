@@ -545,7 +545,7 @@ SERVICE := ${domain}-service
 IMAGE   := mis/\$(SERVICE)
 TAG     ?= dev
 
-.PHONY: help install auth dev build start test lint typecheck \\
+.PHONY: help install install-standalone auth dev build start test lint typecheck \\
         prisma-generate prisma-migrate prisma-deploy seed \\
         docker-build clean
 
@@ -554,6 +554,17 @@ help:                  ## Show this help
 
 install:               ## Install deps for this service (standalone)
 	npm install
+
+install-standalone:    ## Install deps + @mis/* from GitHub (no package.json edit)
+	npm install --no-save \\
+	  git+ssh://git@github.com/muling3/mis-pkg-auth-middleware.git \\
+	  git+ssh://git@github.com/muling3/mis-pkg-audit-logger.git \\
+	  git+ssh://git@github.com/muling3/mis-pkg-error-formatter.git \\
+	  git+ssh://git@github.com/muling3/mis-pkg-metrics.git \\
+	  git+ssh://git@github.com/muling3/mis-pkg-access-control.git \\
+	  git+ssh://git@github.com/muling3/mis-pkg-validation-schemas.git \\
+	  git+ssh://git@github.com/muling3/mis-pkg-circuit-breaker.git \\
+	  git+ssh://git@github.com/muling3/mis-proto.git
 
 auth:                  ## No-op in PoC (no Azure Artifacts feed)
 	@echo "auth: skipped — PoC uses npm workspaces"
