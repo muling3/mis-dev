@@ -1,0 +1,888 @@
+// =====================================================================
+//  MIS — Management Information System
+//  Entity-Relationship Definition (DBML)
+//
+//  Renders in:  https://dbdiagram.io  (paste this file)
+//  Or convert:  npm i -g @dbml/cli && dbml2sql schema.dbml --postgres
+//
+//  Scope:
+//    - PostgreSQL 15 relational core (schemas: auth, registration,
+//      cases, cam, audit_refs)
+//    - MongoDB 6 collections (modelled here as Tables for diagram
+//      visibility; the SQL output should not be used for Mongo)
+//    - Cross-reference notes for InfluxDB and Redis (not relational,
+//      shown as comments only)
+//
+//  Conventions:
+//    - PKs are UUID (Postgres gen_random_uuid())
+//    - Partitioned tables noted in [Note: ...]
+//    - MongoDB ObjectId rendered as `objectid` (a custom type)
+//    - All timestamps are TIMESTAMPTZ
+// =====================================================================
+
+Project mis {
+  database_type: 'PostgreSQL'
+  Note: '''
+    The MIS uses polyglot persistence:
+      * PostgreSQL 15   — relational core (ACID-critical entities)
+      * MongoDB 6       — documents, audit logs, notifications, sandbox
+      * Redis 7 Cluster — sessions, locks, caches, rate limits (not in DBML)
+      * InfluxDB 2      — time-series metrics (not in DBML)
+
+    Schemas inside PostgreSQL:
+      auth          — users, sessions, MFA
+      registration  — entities, applications, certificates
+      cases         — cases, breach notifications, enforcement
+      cam           — compliance & audit management
+      audit_refs    — lightweight FK-able pointers into MongoDB audit log
+
+    Cross-schema foreign keys are deliberate. The SRS requires ACID for
+    Application → Certificate and Case → Resolution chains. Both schemas
+    live in the same Postgres cluster.
+  '''
+}
+
+// =====================================================================
+//  ENUMS
+// =====================================================================
+
+// ── auth ─────────────────────────────────────────────────────────────
+Enum auth.mfa_type_enum {
+  TOTP
+  SMS
+}
+
+Enum auth.account_status_enum {
+  ACTIVE
+  LOCKED
+  DISABLED
+  PENDING
+}
+
+// ── registration ─────────────────────────────────────────────────────
+Enum registration.entity_type_enum {
+  CONTROLLER
+  PROCESSOR
+  BOTH
+}
+
+Enum registration.org_type_enum {
+  PUBLIC
+  PRIVATE
+  NGO
+  PARASTATAL
+  OTHER
+}
+
+Enum registration.sector_enum {
+  FINANCE
+  HEALTH
+  EDUCATION
+  TELECOM
+  GOV
+  RETAIL
+  OTHER
+}
+
+Enum registration.reg_status_enum {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+Enum registration.app_type_enum {
+  NEW
+  RENEWAL
+  AMENDMENT
+  REINSTATEMENT
+}
+
+Enum registration.app_status_enum {
+  SUBMITTED
+  EMAIL_VERIFIED
+  UNDER_REVIEW
+  DECISION_PENDING
+  APPROVED
+  REJECTED
+}
+
+Enum registration.verification_result_enum {
+  MATCH
+  MISMATCH
+  NOT_FOUND
+  ERROR
+}
+
+Enum registration.decision_enum {
+  APPROVE
+  REJECT
+  REQUEST_INFO
+}
+
+Enum registration.cert_type_enum {
+  CONTROLLER
+  PROCESSOR
+}
+
+Enum registration.cert_status_enum {
+  ACTIVE
+  EXPIRED
+  REVOKED
+  SUPERSEDED
+}
+
+// ── cases ────────────────────────────────────────────────────────────
+Enum cases.case_type_enum {
+  COMPLAINT
+  BREACH_NOTIFICATION
+  INQUIRY
+  ENFORCEMENT_REVIEW
+}
+
+Enum cases.priority_enum {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+Enum cases.case_status_enum {
+  SUBMITTED
+  TRIAGED
+  IN_PROGRESS
+  ON_HOLD
+  CLOSED
+  REOPENED
+}
+
+// ── cam (Compliance & Audit Management) ──────────────────────────────
+Enum cam.assess_status_enum {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  SITE_VISIT_SCHEDULED
+  COMPLETED
+  FOLLOWUP_SCHEDULED
+}
+
+Enum cam.inv_status_enum {
+  INITIATED
+  EVIDENCE_GATHERING
+  ANALYSIS
+  REPORTING
+  UNDER_REVIEW
+  CLOSED
+}
+
+Enum cam.action_type_enum {
+  WARNING
+  COMPLIANCE_ORDER
+  PENALTY_NOTICE
+  SUSPENSION
+  REVOCATION
+  LEGAL_REFERRAL
+}
+
+Enum cam.audit_status_enum {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+Enum cam.ack_status_enum {
+  PENDING
+  REVIEWED
+  ACKNOWLEDGED
+  ACTION_TAKEN
+}
+
+// =====================================================================
+//  SCHEMA: auth   (Auth Service — mis-auth-service)
+// =====================================================================
+
+Table auth.users {
+  user_id          uuid         [pk, default: `gen_random_uuid()`]
+  full_name        text         [not null]
+  official_email   text         [not null, unique]
+  username         text         [not null, unique]
+  password_hash    text         [not null, note: 'bcrypt cost 12']
+  mfa_type         auth.mfa_type_enum
+  mfa_secret       text         [note: 'AES-GCM encrypted at rest via Vault transit']
+  roles            "text[]"     [not null, default: `'{}'`]
+  language_pref    text         [not null, default: `'en'`]
+  account_status   auth.account_status_enum [not null, default: 'ACTIVE']
+  failed_attempts  int          [not null, default: 0]
+  locked_at        timestamptz
+  last_login       timestamptz
+  created_at       timestamptz  [not null, default: `now()`]
+
+  indexes {
+    official_email [unique, name: 'uq_users_email']
+    username       [unique, name: 'uq_users_username']
+    account_status [name: 'idx_users_status']
+  }
+  Note: 'Owned by mis-auth-service. Referenced from many schemas for assigned_officer / supervisor / created_by.'
+}
+
+Table auth.sessions {
+  session_id     uuid          [pk, default: `gen_random_uuid()`]
+  user_id        uuid          [not null, ref: > auth.users.user_id]
+  jti            text          [not null, unique, note: 'JWT ID; revocation list lives in Redis']
+  ip_address     inet
+  user_agent     text
+  issued_at      timestamptz   [not null, default: `now()`]
+  expires_at     timestamptz   [not null]
+  revoked_at     timestamptz
+  Note: 'Long-lived session record. Hot session state (TTL 15m) lives in Redis at session:{session_id}.'
+  indexes {
+    user_id    [name: 'idx_sessions_user']
+    expires_at [name: 'idx_sessions_expires']
+  }
+}
+
+
+// =====================================================================
+//  SCHEMA: registration   (Registration Service — mis-registration-service)
+// =====================================================================
+
+Table registration.entities {
+  entity_id        uuid                 [pk, default: `gen_random_uuid()`]
+  legal_name       text                 [not null]
+  entity_type      registration.entity_type_enum [not null]
+  org_type         registration.org_type_enum    [not null]
+  sector           registration.sector_enum      [not null]
+  physical_address jsonb                [not null]
+  official_email   text                 [not null, unique]
+  official_phone   text                 [not null]
+  rdb_number       text                 [not null, unique]
+  rdb_verified     boolean              [not null, default: false]
+  nida_verified    boolean              [not null, default: false]
+  dpo_name         text                 [not null]
+  dpo_email        text                 [not null]
+  dpo_phone        text                 [not null]
+  reg_status       registration.reg_status_enum [not null, default: 'PENDING']
+  first_registered timestamptz
+  created_at       timestamptz          [not null, default: `now()`]
+  updated_at       timestamptz          [not null, default: `now()`]
+
+  indexes {
+    rdb_number  [name: 'idx_entities_rdb']
+    reg_status  [name: 'idx_entities_status']
+    legal_name  [name: 'idx_entities_name_fts', type: gin, note: 'gin(to_tsvector(english, legal_name))']
+  }
+  Note: 'Central entity record. Referenced from applications, certificates, cases, and across the cam schema.'
+}
+
+Table registration.applications {
+  application_id      uuid                 [not null, default: `gen_random_uuid()`]
+  ref_number          text                 [not null, unique]
+  entity_id           uuid                 [ref: > registration.entities.entity_id]
+  app_type            registration.app_type_enum [not null]
+  submitted_at        timestamptz          [not null, default: `now()`]
+  email_verified      boolean              [not null, default: false]
+  rdb_result          registration.verification_result_enum
+  nida_result         registration.verification_result_enum
+  status              registration.app_status_enum [not null, default: 'SUBMITTED']
+  assigned_officer_id uuid                 [ref: > auth.users.user_id]
+  decision_outcome    registration.decision_enum
+  decision_rationale  text
+  decision_at         timestamptz
+  decision_by         uuid                 [ref: > auth.users.user_id]
+  processing_data     jsonb
+
+  indexes {
+    (application_id, submitted_at) [pk]
+    entity_id           [name: 'idx_apps_entity']
+    status              [name: 'idx_apps_status']
+    assigned_officer_id [name: 'idx_apps_officer']
+    submitted_at        [name: 'idx_apps_submitted']
+  }
+  Note: '''
+    PARTITION BY RANGE (submitted_at) — annual partitions
+    applications_2026 FOR VALUES FROM (2026-01-01) TO (2027-01-01)
+    New partitions are created by a scheduled CI job each November.
+  '''
+}
+
+Table registration.certificates {
+  certificate_id    uuid                 [pk, default: `gen_random_uuid()`]
+  cert_number       text                 [not null, unique]
+  entity_id         uuid                 [not null, ref: > registration.entities.entity_id]
+  application_id    uuid                 [not null, note: 'logical FK to applications; cannot be enforced across partitioned PK']
+  cert_type         registration.cert_type_enum   [not null]
+  cert_status       registration.cert_status_enum [not null, default: 'ACTIVE']
+  issued_at         timestamptz          [not null, default: `now()`]
+  effective_date    date                 [not null]
+  expiry_date       date                 [not null]
+  revoked_at        timestamptz
+  revocation_note   text
+  predecessor_cert  uuid                 [ref: > registration.certificates.certificate_id]
+  cert_file_ref     text                 [note: 'pointer to documents collection in MongoDB']
+  public_visible    boolean              [not null, default: true]
+
+  indexes {
+    entity_id   [name: 'idx_certs_entity']
+    cert_status [name: 'idx_certs_status']
+    expiry_date [name: 'idx_certs_expiry']
+    (expiry_date) [name: 'idx_certs_active_expiry', note: 'PARTIAL: WHERE cert_status = ACTIVE']
+  }
+  Note: 'Self-referencing predecessor_cert builds certificate lineage per entity.'
+}
+
+
+// =====================================================================
+//  SCHEMA: cases   (Case Service — mis-case-service)
+// =====================================================================
+
+Table cases.cases {
+  case_id           uuid                 [not null, default: `gen_random_uuid()`]
+  ref_number        text                 [not null, unique]
+  case_type         cases.case_type_enum [not null]
+  entity_id         uuid                 [ref: > registration.entities.entity_id, note: 'nullable: complaints can target unregistered entities']
+  submitted_at      timestamptz          [not null, default: `now()`]
+  submitter_name    text                 [not null]
+  submitter_email   text
+  severity_score    int                  [note: 'CHECK 1..100']
+  priority          cases.priority_enum  [not null, default: 'MEDIUM']
+  assigned_officer  uuid                 [ref: > auth.users.user_id]
+  supervisor_id     uuid                 [not null, ref: > auth.users.user_id]
+  case_status       cases.case_status_enum [not null, default: 'SUBMITTED']
+  sla_deadline      timestamptz
+  sla_breached      boolean              [not null, default: false]
+  closed_at         timestamptz
+  resolution_outcome text
+
+  indexes {
+    (case_id, submitted_at) [pk]
+    (case_status, assigned_officer) [name: 'idx_cases_status_officer', note: 'composite: leading status, trailing officer']
+    entity_id          [name: 'idx_cases_entity']
+    submitted_at       [name: 'idx_cases_submitted']
+    sla_deadline       [name: 'idx_cases_sla_deadline']
+  }
+  Note: '''
+    PARTITION BY RANGE (submitted_at) — annual partitions
+    cases_2026 FOR VALUES FROM (2026-01-01) TO (2027-01-01)
+  '''
+}
+
+Table cases.breach_notifications {
+  breach_id         uuid                 [pk, default: `gen_random_uuid()`]
+  case_id           uuid                 [not null]
+  entity_id         uuid                 [not null, ref: > registration.entities.entity_id]
+  reported_at       timestamptz          [not null, default: `now()`]
+  occurred_at       timestamptz          [not null]
+  breach_nature     text                 [not null]
+  affected_count    int
+  severity_score    int                  [note: 'CHECK 1..100']
+  reporter_name     text                 [not null]
+  reporter_email    text                 [not null]
+  containment_notes text
+  notifies_subjects boolean              [not null, default: false]
+  status            text                 [not null, default: 'OPEN']
+  doc_service_ref   text                 [note: 'breach report PDF in documents collection']
+  created_at        timestamptz          [not null, default: `now()`]
+
+  indexes {
+    case_id      [name: 'idx_breach_case']
+    entity_id    [name: 'idx_breach_entity']
+    reported_at  [name: 'idx_breach_reported']
+  }
+  Note: 'Logical FK to cases.cases via case_id (partitioned table; enforced at application layer).'
+}
+
+Table cases.enforcement_actions {
+  action_id        uuid                  [pk, default: `gen_random_uuid()`]
+  case_id          uuid                  [not null]
+  entity_id        uuid                  [not null, ref: > registration.entities.entity_id]
+  action_type      cam.action_type_enum  [not null]
+  penalty_amount   "numeric(15,2)"
+  doc_service_ref  text                  [note: 'signed enforcement order in MongoDB documents']
+  issued_at        timestamptz
+  approved_by      uuid                  [ref: > auth.users.user_id]
+  appeal_status    text                  [note: 'NONE | PENDING | UPHELD | DISMISSED']
+  appeal_outcome   text
+  created_at       timestamptz           [not null, default: `now()`]
+
+  indexes {
+    case_id   [name: 'idx_enforce_case']
+    entity_id [name: 'idx_enforce_entity']
+  }
+  Note: 'Mirror enforcement action exists at cam.enforcement_actions for audit-driven actions; both share action_type_enum.'
+}
+
+
+// =====================================================================
+//  SCHEMA: cam   (Compliance & Audit Management)
+//
+//  cam.* tables are owned by mis-admin-service (compliance functions)
+//  and read by mis-reporting-service. They share the Postgres cluster
+//  with registration/cases for ACID-guaranteed cross-schema FKs.
+// =====================================================================
+
+Table cam.assessments {
+  assessment_id          uuid                       [pk, default: `gen_random_uuid()`]
+  entity_id              uuid                       [not null, ref: > registration.entities.entity_id]
+  form_schema_version    text                       [not null]
+  status                 cam.assess_status_enum     [not null, default: 'DRAFT']
+  institution_layer      jsonb                      [note: 'locked on submission']
+  dpo_verification_layer jsonb                      [note: 'DPO input only post-submission']
+  immutability_hash      text                       [note: 'SHA-256 of institution_layer at lock']
+  discrepancy_count      int                        [not null, default: 0]
+  compliance_status      text                       [note: 'configurable via admin console']
+  compliance_evaluation  jsonb                      [note: 'gaps, risk areas, corrective actions']
+  reviewed_by            uuid                       [ref: > auth.users.user_id]
+  followup_date          date
+  submitted_at           timestamptz
+  locked_at              timestamptz
+  completed_at           timestamptz
+  created_at             timestamptz                [not null, default: `now()`]
+  updated_at             timestamptz                [not null, default: `now()`]
+
+  indexes {
+    entity_id     [name: 'idx_cam_assessments_entity']
+    status        [name: 'idx_cam_assessments_status']
+    followup_date [name: 'idx_cam_assessments_followup', note: 'PARTIAL: WHERE followup_date IS NOT NULL']
+  }
+}
+
+Table cam.assessment_drafts {
+  draft_id            uuid          [pk, default: `gen_random_uuid()`]
+  entity_id           uuid          [not null, ref: > registration.entities.entity_id]
+  form_schema_version text          [not null]
+  draft_data          jsonb         [not null]
+  last_saved_at       timestamptz   [not null, default: `now()`]
+  expires_at          timestamptz   [not null]
+
+  indexes {
+    entity_id  [name: 'idx_cam_drafts_entity']
+    expires_at [name: 'idx_cam_drafts_expiry']
+  }
+  Note: 'TTL-purged after 90 days by a scheduled cleanup job.'
+}
+
+Table cam.assessment_discrepancies {
+  discrepancy_id       uuid         [pk, default: `gen_random_uuid()`]
+  assessment_id        uuid         [not null, ref: > cam.assessments.assessment_id]
+  question_ref         text         [not null]
+  institution_response text
+  dpo_response         text
+  flagged_at           timestamptz  [not null, default: `now()`]
+
+  indexes {
+    assessment_id [name: 'idx_cam_disc_assessment']
+  }
+}
+
+Table cam.alert_rules {
+  rule_id              uuid          [pk, default: `gen_random_uuid()`]
+  rule_name            text          [not null]
+  trigger_condition    jsonb         [not null]
+  notification_methods jsonb         [not null, default: `'["in_app","email"]'::jsonb`]
+  is_active            boolean       [not null, default: true]
+  created_by           uuid          [not null, ref: > auth.users.user_id]
+  created_at           timestamptz   [not null, default: `now()`]
+  updated_at           timestamptz   [not null, default: `now()`]
+}
+
+Table cam.entity_risk_profiles {
+  profile_id         uuid             [pk, default: `gen_random_uuid()`]
+  entity_id          uuid             [not null, unique, ref: > registration.entities.entity_id]
+  risk_score         "numeric(5,2)"   [not null, note: 'CHECK 0..100']
+  score_components   jsonb            [not null]
+  calculated_at      timestamptz      [not null, default: `now()`]
+  next_recalculation date             [not null]
+
+  indexes {
+    entity_id          [name: 'idx_cam_risk_entity']
+    risk_score         [name: 'idx_cam_risk_score', note: 'DESC']
+  }
+}
+
+Table cam.investigations {
+  investigation_id   uuid                       [pk, default: `gen_random_uuid()`]
+  ref_number         text                       [not null, unique]
+  entity_id          uuid                       [ref: > registration.entities.entity_id]
+  cms_case_id        uuid                       [note: 'cross-ref to cases.cases.case_id; not FK-enforced due to partitioning']
+  assessment_id      uuid                       [ref: > cam.assessments.assessment_id]
+  inv_status         cam.inv_status_enum        [not null, default: 'INITIATED']
+  initiated_by       uuid                       [not null, ref: > auth.users.user_id]
+  initiated_at       timestamptz                [not null, default: `now()`]
+  closed_at          timestamptz
+  findings           text
+  conclusions        text
+  corrective_actions text
+  updated_at         timestamptz                [not null, default: `now()`]
+
+  indexes {
+    entity_id   [name: 'idx_cam_inv_entity']
+    inv_status  [name: 'idx_cam_inv_status']
+    cms_case_id [name: 'idx_cam_inv_case', note: 'PARTIAL: WHERE cms_case_id IS NOT NULL']
+  }
+}
+
+Table cam.investigation_evidence {
+  evidence_id       uuid          [pk, default: `gen_random_uuid()`]
+  investigation_id  uuid          [not null, ref: > cam.investigations.investigation_id]
+  doc_service_ref   text          [not null, note: 'pointer to documents collection in MongoDB']
+  evidence_type     text          [not null]
+  category          text
+  uploaded_by       uuid          [not null, ref: > auth.users.user_id]
+  uploaded_at       timestamptz   [not null, default: `now()`]
+  access_restricted boolean       [not null, default: false]
+
+  indexes {
+    investigation_id [name: 'idx_cam_evidence_inv']
+  }
+}
+
+Table cam.enforcement_actions {
+  action_id           uuid                    [pk, default: `gen_random_uuid()`]
+  investigation_id    uuid                    [ref: > cam.investigations.investigation_id]
+  entity_id           uuid                    [not null, ref: > registration.entities.entity_id]
+  action_type         cam.action_type_enum    [not null]
+  penalty_amount      "numeric(15,2)"
+  penalty_calc_inputs jsonb                   [note: 'violation_type, severity_band, regulation_ref']
+  doc_service_ref     text                    [note: 'signed enforcement document']
+  issued_at           timestamptz
+  approved_by         uuid                    [ref: > auth.users.user_id]
+  appeal_status       text
+  appeal_outcome      text
+  created_at          timestamptz             [not null, default: `now()`]
+
+  indexes {
+    entity_id        [name: 'idx_cam_enforcement_entity']
+    investigation_id [name: 'idx_cam_enforcement_inv', note: 'PARTIAL: WHERE investigation_id IS NOT NULL']
+  }
+}
+
+Table cam.financial_records {
+  record_id       uuid             [pk, default: `gen_random_uuid()`]
+  action_id       uuid             [not null, ref: > cam.enforcement_actions.action_id]
+  amount_received "numeric(15,2)"  [not null]
+  received_at     timestamptz      [not null]
+  fms_reference   text             [not null, unique]
+  recorded_at     timestamptz      [not null, default: `now()`]
+
+  indexes {
+    action_id [name: 'idx_cam_financial_action']
+  }
+  Note: 'Populated via NCSA FMS webhook into mis-admin-service.'
+}
+
+Table cam.audit_schedule {
+  schedule_id      uuid                    [pk, default: `gen_random_uuid()`]
+  entity_id        uuid                    [not null, ref: > registration.entities.entity_id]
+  risk_profile_id  uuid                    [ref: > cam.entity_risk_profiles.profile_id]
+  audit_objectives jsonb
+  planned_start    date                    [not null]
+  planned_end      date                    [not null]
+  assigned_officer uuid                    [ref: > auth.users.user_id]
+  audit_status     cam.audit_status_enum   [not null, default: 'PLANNED']
+  mongo_audit_ref  text                    [note: '_id of cam_audits document in MongoDB']
+  created_at       timestamptz             [not null, default: `now()`]
+  updated_at       timestamptz             [not null, default: `now()`]
+
+  indexes {
+    entity_id              [name: 'idx_cam_schedule_entity']
+    audit_status           [name: 'idx_cam_schedule_status']
+    (planned_start, planned_end) [name: 'idx_cam_schedule_dates']
+  }
+}
+
+Table cam.audit_results {
+  result_id           uuid             [pk, default: `gen_random_uuid()`]
+  schedule_id         uuid             [not null, ref: > cam.audit_schedule.schedule_id]
+  compliance_score    "numeric(5,2)"   [note: 'CHECK 0..100']
+  score_components    jsonb
+  noncompliance_flags jsonb            [note: 'refs to cam_regulatory_library entries']
+  completed_at        timestamptz      [not null, default: `now()`]
+
+  indexes {
+    schedule_id [name: 'idx_cam_results_schedule']
+  }
+}
+
+Table cam.audit_reports {
+  report_id         uuid                  [pk, default: `gen_random_uuid()`]
+  result_id         uuid                  [not null, ref: > cam.audit_results.result_id]
+  schedule_id       uuid                  [not null, ref: > cam.audit_schedule.schedule_id]
+  version           int                   [not null, default: 1]
+  doc_service_ref   text                  [note: 'PDF in MongoDB documents']
+  entity_ack_status cam.ack_status_enum   [not null, default: 'PENDING']
+  distributed_at    timestamptz
+  generated_by      uuid                  [ref: > auth.users.user_id]
+  created_at        timestamptz           [not null, default: `now()`]
+
+  indexes {
+    result_id           [name: 'idx_cam_reports_result']
+    schedule_id         [name: 'idx_cam_reports_schedule']
+    (result_id, version) [unique, name: 'idx_cam_reports_version']
+  }
+}
+
+Table cam.audit_followup_actions {
+  followup_id         uuid          [pk, default: `gen_random_uuid()`]
+  report_id           uuid          [not null, ref: > cam.audit_reports.report_id]
+  action_description  text          [not null]
+  responsible_officer uuid          [ref: > auth.users.user_id]
+  due_date            date          [not null]
+  completed_at        timestamptz
+  reminder_sent       boolean       [not null, default: false]
+  created_at          timestamptz   [not null, default: `now()`]
+
+  indexes {
+    report_id [name: 'idx_cam_followup_report']
+    due_date  [name: 'idx_cam_followup_due', note: 'PARTIAL: WHERE completed_at IS NULL']
+  }
+}
+
+
+// =====================================================================
+//  SCHEMA: audit_refs
+//
+//  Lightweight cross-references from Postgres to the MongoDB audit log.
+//  audit_logs themselves live in MongoDB (see below) — these rows are
+//  just FK-safe pointers used when a Postgres record needs to surface
+//  related audit entries (e.g. case timeline render).
+// =====================================================================
+
+Table audit_refs.entry_refs {
+  ref_id        uuid          [pk, default: `gen_random_uuid()`]
+  log_entry_id  text          [not null, unique, note: 'String(UUID) matching MongoDB audit_logs.log_entry_id']
+  target_type   text          [not null]
+  target_id     uuid          [not null]
+  recorded_at   timestamptz   [not null, default: `now()`]
+
+  indexes {
+    (target_type, target_id) [name: 'idx_audit_refs_target']
+    log_entry_id             [name: 'idx_audit_refs_logid']
+  }
+}
+
+
+// =====================================================================
+//  MongoDB collections (modelled for diagram only — DBML SQL output
+//  must not be applied as DDL for these)
+// =====================================================================
+
+Table mongo.audit_logs [headercolor: #335577] {
+  _id              objectid       [pk]
+  log_entry_id     text           [unique, note: 'UUID string; cross-ref from Postgres audit_refs.entry_refs']
+  timestamp        timestamptz    [not null]
+  actor            text           [not null, note: 'user_id (UUID) or system identifier']
+  actor_role       "text[]"
+  source_ip        text
+  session_id       text
+  action_type      text           [note: 'LOGIN|LOGOUT|CREATE|READ|UPDATE|DELETE|UPLOAD|DOWNLOAD|STATUS_CHANGE|ASSIGNMENT|DECISION|ENFORCEMENT_ACTION|CERTIFICATE_ISSUE|CERTIFICATE_REVOKE|CONFIG_CHANGE|API_CALL']
+  target_type      text
+  target_id        text
+  field_changed    text
+  previous_value   text           [note: 'Mixed in Mongo']
+  new_value        text           [note: 'Mixed in Mongo']
+  result           text           [note: 'SUCCESS | FAILURE | PARTIAL']
+  associated_ref   text
+  prev_entry_hash  text           [note: 'SHA-256 of previous entry; tamper-evidence chain']
+  entry_hash       text           [note: 'SHA-256 of this entry']
+
+  Note: '''
+    APPEND-ONLY. Sharded on {actor: hashed, timestamp: 1}.
+    Indexes: {actor:1,timestamp:-1}, {target_type:1,target_id:1,timestamp:-1},
+             {action_type:1,timestamp:-1}, {session_id:1}
+    TTL: 5 years (157_680_000s).
+    Hash chain: each new entry's prev_entry_hash = SHA-256(previous_entry).
+  '''
+}
+
+Table mongo.documents [headercolor: #335577] {
+  _id                    objectid   [pk]
+  document_id            text       [unique, note: 'UUID string']
+  parent_ref             text       [note: 'UUID string of owning record']
+  parent_type            text       [note: 'application | case | investigation | audit_report | enforcement_action']
+  doc_type               text
+  original_filename      text
+  system_filename        text
+  file_extension         text
+  file_size_bytes        bigint
+  sha256_hash            text
+  uploaded_at            timestamptz
+  uploaded_by            text       [note: 'user_id UUID']
+  sandbox_classification text       [note: 'SAFE | SUSPICIOUS | MALICIOUS']
+  cuckoo_task_id         text
+  clamav_result          text
+  yara_matches           "text[]"
+  suricata_alerts        "text[]"
+  storage_path           text       [note: 'Encrypted at rest; never returned via API']
+  doc_status             text       [note: 'ACTIVE | QUARANTINED | BLOCKED | ARCHIVED | DELETED']
+  retention_expiry       timestamptz
+
+  Note: 'Owned by mis-document-service. Many Postgres tables hold doc_service_ref pointing to document_id.'
+}
+
+Table mongo.notifications [headercolor: #335577] {
+  _id              objectid     [pk]
+  notification_id  text         [unique]
+  recipient_id     text         [note: 'user_id UUID or external email']
+  channel          text         [note: 'EMAIL | SMS | IN_APP | WEBHOOK']
+  template_ref     text
+  payload          text         [note: 'JSON']
+  status           text         [note: 'PENDING | SENT | FAILED | DELIVERED | READ']
+  attempts         int
+  last_attempt_at  timestamptz
+  created_at       timestamptz
+  delivered_at     timestamptz
+
+  Note: 'Owned by mis-notification-service. Indexed on recipient_id + created_at.'
+}
+
+Table mongo.case_communications [headercolor: #335577] {
+  _id           objectid       [pk]
+  case_id       text           [not null, note: 'UUID string; FK to cases.cases.case_id']
+  author_id     text           [not null]
+  author_role   text
+  message       text           [not null]
+  attachments   "text[]"       [note: 'document_id list']
+  visibility    text           [note: 'INTERNAL | EXTERNAL']
+  created_at    timestamptz    [not null]
+
+  Note: 'Immutable case timeline. Indexed on {case_id: 1, created_at: 1}.'
+}
+
+Table mongo.cuckoo_reports [headercolor: #335577] {
+  _id              objectid     [pk]
+  cuckoo_task_id   text         [unique]
+  document_id      text         [note: 'pointer to documents._id']
+  submitted_at     timestamptz
+  completed_at     timestamptz
+  classification   text         [note: 'SAFE | SUSPICIOUS | MALICIOUS']
+  signatures       text         [note: 'JSON array of matched signatures']
+  network_iocs     text         [note: 'JSON array of network indicators']
+  file_iocs        text         [note: 'JSON array of file indicators']
+  raw_report       text         [note: 'Full Cuckoo JSON; ~1–10 MB typical']
+
+  Note: 'Owned by mis-sandbox-service. Stored on sandbox-namespace MongoDB collection.'
+}
+
+Table mongo.cam_audits [headercolor: #335577] {
+  _id                    objectid     [pk]
+  schedule_id            text         [note: 'FK to cam.audit_schedule.schedule_id']
+  version                int
+  scope                  text         [note: 'JSON: entity_ids, entity_types, sectors, risk_levels']
+  objectives             "text[]"
+  methodology            text
+  procedures             "text[]"
+  timeline               text         [note: 'JSON: start, end, milestones[]']
+  resource_allocation    text         [note: 'JSON array of {officer_id, role}']
+  checklist_template_ref text
+  created_by             text         [note: 'user_id UUID']
+  created_at             timestamptz
+  version_history        text         [note: 'JSON: inline history of prior versions']
+
+  Note: 'Version-controlled audit plans. cam.audit_schedule.mongo_audit_ref holds _id as string.'
+}
+
+Table mongo.cam_workpapers [headercolor: #335577] {
+  _id            objectid       [pk]
+  schedule_id    text           [note: 'FK to cam.audit_schedule.schedule_id']
+  workpaper_ref  text           [note: 'human-readable e.g. WP-2026-001']
+  section        text           [note: 'e.g. Data Minimisation']
+  procedure      text
+  observations   text           [note: 'JSON array']
+  findings       text           [note: 'JSON array of {finding_ref, severity, description, regulatory_ref}']
+  evidence_refs  "text[]"       [note: 'document_id or cam_evidence UUIDs']
+  conclusion     text
+  reviewer       text           [note: 'user_id UUID']
+  status         text           [note: 'DRAFT | REVIEWED | FINALISED']
+  created_at     timestamptz
+  updated_at     timestamptz
+}
+
+Table mongo.cam_regulatory_library [headercolor: #335577] {
+  _id                   objectid     [pk]
+  requirement_ref       text         [unique, note: 'e.g. LAW-058-ART-12']
+  title                 text
+  description           text
+  source_law            text         [note: 'e.g. Law No. 058/2021']
+  article_ref           text
+  severity_weight       int          [note: '0–100; used by ComplianceScorer']
+  impact_score          int
+  sector_applicability  "text[]"     [note: '[] = all sectors']
+  is_active             boolean
+  created_at            timestamptz
+  updated_at            timestamptz
+
+  Note: 'Retained indefinitely (no TTL). Referenced from cam.audit_results.noncompliance_flags.'
+}
+
+
+// =====================================================================
+//  CROSS-STORE REFERENCES (visual only)
+//
+//  DBML cannot model cross-system FKs but we encode them as virtual refs
+//  on the Postgres side so the diagram lays them out next to each other.
+// =====================================================================
+
+Ref: audit_refs.entry_refs.log_entry_id   > mongo.audit_logs.log_entry_id
+Ref: mongo.case_communications.case_id    > cases.cases.case_id          // logical only (case_id is partitioned PK)
+Ref: mongo.cuckoo_reports.document_id     > mongo.documents.document_id  // pointer between Mongo collections
+Ref: mongo.cam_audits.schedule_id         > cam.audit_schedule.schedule_id
+Ref: mongo.cam_workpapers.schedule_id     > cam.audit_schedule.schedule_id
+
+
+// =====================================================================
+//  Per-microservice ownership matrix (informational)
+//
+//  These TableGroups exist only for visual clustering in dbdiagram.io.
+// =====================================================================
+
+TableGroup auth_service {
+  auth.users
+  auth.sessions
+}
+
+TableGroup registration_service {
+  registration.entities
+  registration.applications
+  registration.certificates
+}
+
+TableGroup case_service {
+  cases.cases
+  cases.breach_notifications
+  cases.enforcement_actions
+  mongo.case_communications
+}
+
+TableGroup admin_service_cam {
+  cam.assessments
+  cam.assessment_drafts
+  cam.assessment_discrepancies
+  cam.alert_rules
+  cam.entity_risk_profiles
+  cam.investigations
+  cam.investigation_evidence
+  cam.enforcement_actions
+  cam.financial_records
+  cam.audit_schedule
+  cam.audit_results
+  cam.audit_reports
+  cam.audit_followup_actions
+  mongo.cam_audits
+  mongo.cam_workpapers
+  mongo.cam_regulatory_library
+  mongo.audit_logs
+  audit_refs.entry_refs
+}
+
+TableGroup document_service {
+  mongo.documents
+}
+
+TableGroup sandbox_service {
+  mongo.cuckoo_reports
+}
+
+TableGroup notification_service {
+  mongo.notifications
+}
