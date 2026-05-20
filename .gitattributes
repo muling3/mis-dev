@@ -1,0 +1,40 @@
+# Cross-platform line endings. Without this, Git for Windows (core.autocrlf=true
+# by default) converts shell scripts to CRLF on clone, which silently breaks
+# the shebang: `bash: /usr/bin/env: 'bash\r': No such file or directory`.
+# Force LF everywhere the toolchain reads as text — bash, make, docker, k8s.
+
+* text=auto eol=lf
+
+# Belt-and-braces for files the shell/make/docker toolchain reads directly:
+*.sh           text eol=lf
+*.bash         text eol=lf
+Makefile       text eol=lf
+*.mk           text eol=lf
+Dockerfile     text eol=lf
+*.dockerfile   text eol=lf
+*.yml          text eol=lf
+*.yaml         text eol=lf
+*.json         text eol=lf
+*.toml         text eol=lf
+*.proto        text eol=lf
+*.ts           text eol=lf
+*.tsx          text eol=lf
+*.js           text eol=lf
+*.mjs          text eol=lf
+*.cjs          text eol=lf
+*.md           text eol=lf
+*.env          text eol=lf
+.env.example   text eol=lf
+.npmrc         text eol=lf
+.npmrc.example text eol=lf
+
+# Binary — never touch line endings.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.gz binary

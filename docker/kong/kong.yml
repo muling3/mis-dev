@@ -37,7 +37,7 @@ plugins:
       fault_tolerant: true
 
 # Consumer + HS256 credential. `key` must equal the token's `iss` claim;
-# `secret` must match mis-auth-service's JWT_SECRET / scripts/mint-token.sh.
+# `secret` must match mis-auth-service's JWT_SECRET / scripts/mint-token.js.
 # (jwt_secrets.secret is not vault-referenceable — fine for a PoC dev secret;
 # wire a real secret store before anything non-local.)
 consumers:

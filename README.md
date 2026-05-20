@@ -13,8 +13,8 @@ service repo you're working on.
 | Need | Why | Check |
 |------|-----|-------|
 | Docker Engine + Compose v2 | infra + Kong | `docker compose version` |
-| Node.js ≥ 22 (LTS) + npm | building/running a service | `node -v` |
-| `bash`, `curl`, `openssl` | `mint-token.sh`, verification | `openssl version` |
+| Node.js ≥ 22 (LTS) + npm | building/running a service; runs `scripts/*.js` | `node -v` |
+| `curl` | smoke-testing Kong + services | `curl --version` |
 | git over SSH to `github.com/muling3` | cloning service/package repos | `ssh -T git@github.com` |
 
 **Host ports that must be free** (a stray process/Compose project here is the
@@ -166,7 +166,7 @@ make kong-metrics                                        # Kong counters
 `requirements.http` (REST Client) exercises the whole matrix.
 
 The signing secret is a throwaway dev value duplicated in `kong.yml` and
-`scripts/mint-token.sh` (`JWT_SECRET`, default `mis-poc-dev-secret-change-me`)
+`scripts/mint-token.js` (`JWT_SECRET`, default `mis-poc-dev-secret-change-me`)
 — Kong's `jwt_secrets.secret` isn't vault-referenceable; wire a real secret
 store before anything non-local.
 
