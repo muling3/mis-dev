@@ -2,23 +2,23 @@
 # Format:  <name>  <clone-url>     (used by `make repos`)
 
 # Orchestrator (infra + Kong + docs + scaffold) — this repo
-mis-dev                     git@github.com:muling3/mis-dev.git
+mis-dev                     https://github.com/muling3/mis-dev.git
 
 # Services (NestJS) — port shown in mis-dev/docs/urls.txt
-mis-auth-service            git@github.com:muling3/mis-auth-svc.git
-mis-registration-service    git@github.com:muling3/mis-registration-svc.git
-mis-case-service            git@github.com:muling3/mis-case-svc.git
-mis-sandbox-service         git@github.com:muling3/mis-sandbox-svc.git
-mis-notification-service    git@github.com:muling3/mis-notification-svc.git
-mis-document-service        git@github.com:muling3/mis-document-svc.git
-mis-admin-service           git@github.com:muling3/mis-admin-svc.git
+mis-auth-service            https://github.com/muling3/mis-auth-svc.git
+mis-registration-service    https://github.com/muling3/mis-registration-svc.git
+mis-case-service            https://github.com/muling3/mis-case-svc.git
+mis-sandbox-service         https://github.com/muling3/mis-sandbox-svc.git
+mis-notification-service    https://github.com/muling3/mis-notification-svc.git
+mis-document-service        https://github.com/muling3/mis-document-svc.git
+mis-admin-service           https://github.com/muling3/mis-admin-svc.git
 
 # Shared @mis/* packages (published to the Azure Artifacts feed)
-mis-pkg-auth-middleware     git@github.com:muling3/mis-pkg-auth-middleware.git
-mis-pkg-audit-logger        git@github.com:muling3/mis-pkg-audit-logger.git
-mis-pkg-error-formatter     git@github.com:muling3/mis-pkg-error-formatter.git
-mis-pkg-metrics             git@github.com:muling3/mis-pkg-metrics.git
-mis-pkg-access-control      git@github.com:muling3/mis-pkg-access-control.git
-mis-pkg-validation-schemas  git@github.com:muling3/mis-pkg-validation-schemas.git
-mis-pkg-circuit-breaker     git@github.com:muling3/mis-pkg-circuit-breaker.git
-mis-proto                   git@github.com:muling3/mis-proto.git
+mis-pkg-auth-middleware     https://github.com/muling3/mis-pkg-auth-middleware.git
+mis-pkg-audit-logger        https://github.com/muling3/mis-pkg-audit-logger.git
+mis-pkg-error-formatter     https://github.com/muling3/mis-pkg-error-formatter.git
+mis-pkg-metrics             https://github.com/muling3/mis-pkg-metrics.git
+mis-pkg-access-control      https://github.com/muling3/mis-pkg-access-control.git
+mis-pkg-validation-schemas  https://github.com/muling3/mis-pkg-validation-schemas.git
+mis-pkg-circuit-breaker     https://github.com/muling3/mis-pkg-circuit-breaker.git
+mis-proto                   https://github.com/muling3/mis-proto.git

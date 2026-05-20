@@ -571,14 +571,14 @@ install:               ## Install deps for this service (standalone)
 
 install-standalone:    ## Install deps + @mis/* from GitHub (no package.json edit)
 \tnpm install --no-save \\
-\t  git+ssh://git@github.com/muling3/mis-pkg-auth-middleware.git \\
-\t  git+ssh://git@github.com/muling3/mis-pkg-audit-logger.git \\
-\t  git+ssh://git@github.com/muling3/mis-pkg-error-formatter.git \\
-\t  git+ssh://git@github.com/muling3/mis-pkg-metrics.git \\
-\t  git+ssh://git@github.com/muling3/mis-pkg-access-control.git \\
-\t  git+ssh://git@github.com/muling3/mis-pkg-validation-schemas.git \\
-\t  git+ssh://git@github.com/muling3/mis-pkg-circuit-breaker.git \\
-\t  git+ssh://git@github.com/muling3/mis-proto.git
+\t  git+https://github.com/muling3/mis-pkg-auth-middleware.git \\
+\t  git+https://github.com/muling3/mis-pkg-audit-logger.git \\
+\t  git+https://github.com/muling3/mis-pkg-error-formatter.git \\
+\t  git+https://github.com/muling3/mis-pkg-metrics.git \\
+\t  git+https://github.com/muling3/mis-pkg-access-control.git \\
+\t  git+https://github.com/muling3/mis-pkg-validation-schemas.git \\
+\t  git+https://github.com/muling3/mis-pkg-circuit-breaker.git \\
+\t  git+https://github.com/muling3/mis-proto.git
 
 auth:                  ## Authenticate npm to the @mis Azure feed (cross-platform)
 \t@test -f .npmrc || { echo "no .npmrc — cp .npmrc.example .npmrc and set <org>/<project>/<feed>"; exit 1; }

@@ -15,7 +15,7 @@ service repo you're working on.
 | Docker Engine + Compose v2 | infra + Kong | `docker compose version` |
 | Node.js ≥ 22 (LTS) + npm | building/running a service; runs `scripts/*.js` | `node -v` |
 | `curl` | smoke-testing Kong + services | `curl --version` |
-| git over SSH to `github.com/muling3` | cloning service/package repos | `ssh -T git@github.com` |
+| git + HTTPS access to `github.com/muling3` | cloning service/package repos | `git ls-remote https://github.com/muling3/mis-dev.git` |
 
 **Host ports that must be free** (a stray process/Compose project here is the
 #1 failure):
@@ -27,7 +27,7 @@ service repo you're working on.
 ## Quick start
 
 ```bash
-git clone git@github.com:muling3/mis-dev.git && cd mis-dev
+git clone https://github.com/muling3/mis-dev.git && cd mis-dev
 
 # Work on ONE service through Kong — clones it next to mis-dev, installs
 # deps, brings up infra+Kong, runs it. No manual steps, no errors.
@@ -48,7 +48,7 @@ Manual equivalent (if you prefer to drive the service repo yourself):
 
 ```bash
 make infra-up                                   # infra + Kong, once
-cd .. && git clone git@github.com:muling3/mis-auth-svc.git && cd mis-auth-svc
+cd .. && git clone https://github.com/muling3/mis-auth-svc.git && cd mis-auth-svc
 make install-standalone                          # @mis/* from GitHub (or install-azure)
 make dev                                         # watch mode → :3001
 ```
