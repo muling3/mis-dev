@@ -132,6 +132,150 @@ import { AppController } from './app.controller';
 export class AppModule {}
 `;
 
+// ── Cross-platform helper scripts written into every generated repo ───────
+// Each generated Makefile recipe is a single \`node scripts/*.js\` call so
+// recipes run unchanged under cmd.exe, PowerShell, sh, and bash. The scripts
+// below replace the bash-only awk/test/uname/rm -rf/DOCKER_BUILDKIT= bits.
+
+const SHELL_DETECT = `ifeq ($(OS),Windows_NT)
+  SHELL := cmd.exe
+  .SHELLFLAGS := /C
+else
+  SHELL := /bin/sh
+endif
+
+`;
+
+const SCRIPT_HELP = `#!/usr/bin/env node
+// Parse the local Makefile for '## ...' help comments and print them.
+
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const text = fs.readFileSync(path.join(__dirname, '..', 'Makefile'), 'utf8');
+for (const line of text.split(/\\r?\\n/)) {
+  const m = line.match(/^([a-zA-Z_-]+):.*?## (.*)$/);
+  if (m) console.log(\`  \${m[1].padEnd(18)} \${m[2]}\`);
+}
+`;
+
+const SCRIPT_AUTH = `#!/usr/bin/env node
+// Cross-platform npm auth for the @mis Azure Artifacts feed.
+//   Linux/macOS/CI: expect AZURE_NPM_TOKEN env var (base64 Azure PAT).
+//   Windows:        fall back to vsts-npm-auth (must be installed).
+
+'use strict';
+
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+
+if (!fs.existsSync('.npmrc')) {
+  console.error('no .npmrc — cp .npmrc.example .npmrc and set <org>/<project>/<feed>');
+  process.exit(1);
+}
+
+if (process.env.AZURE_NPM_TOKEN) {
+  console.log('auth: AZURE_NPM_TOKEN set — npm reads it from .npmrc (no action needed)');
+  process.exit(0);
+}
+
+if (process.platform === 'win32') {
+  const r = spawnSync('vsts-npm-auth', ['-config', '.npmrc'], {
+    stdio: 'inherit',
+    shell: true,
+  });
+  process.exit(r.status ?? 1);
+}
+
+console.error('auth: no credentials. Linux/macOS/CI:  export AZURE_NPM_TOKEN=<base64 Azure PAT>');
+console.error("      Windows: install vsts-npm-auth, then re-run 'make auth'");
+process.exit(1);
+`;
+
+const SCRIPT_CLEAN = `#!/usr/bin/env node
+// Remove build artefacts (dist/, node_modules/, *.tgz). Cross-platform
+// replacement for \`rm -rf dist node_modules *.tgz\`.
+
+'use strict';
+
+const fs = require('node:fs');
+
+for (const t of ['dist', 'node_modules']) {
+  try { fs.rmSync(t, { recursive: true, force: true }); } catch {}
+}
+try {
+  for (const f of fs.readdirSync('.')) {
+    if (f.endsWith('.tgz')) fs.rmSync(f, { force: true });
+  }
+} catch {}
+`;
+
+const SCRIPT_INSTALL_STANDALONE = `#!/usr/bin/env node
+// Install @mis/* packages directly from the public GitHub repos over HTTPS
+// (no .npmrc, no Azure feed credentials). Cross-platform replacement for
+// the multi-line bash \`npm install --no-save\` chain.
+
+'use strict';
+
+const { spawnSync } = require('node:child_process');
+
+const URLS = [
+  'git+https://github.com/muling3/mis-pkg-auth-middleware.git',
+  'git+https://github.com/muling3/mis-pkg-audit-logger.git',
+  'git+https://github.com/muling3/mis-pkg-error-formatter.git',
+  'git+https://github.com/muling3/mis-pkg-metrics.git',
+  'git+https://github.com/muling3/mis-pkg-access-control.git',
+  'git+https://github.com/muling3/mis-pkg-validation-schemas.git',
+  'git+https://github.com/muling3/mis-pkg-circuit-breaker.git',
+  'git+https://github.com/muling3/mis-proto.git',
+];
+
+const r = spawnSync('npm', ['install', '--no-save', ...URLS], {
+  stdio: 'inherit',
+  shell: true,
+});
+process.exit(r.status ?? 1);
+`;
+
+const SCRIPT_DOCKER_BUILD = `#!/usr/bin/env node
+// Build the service's Docker image with BuildKit + the Azure feed token
+// injected as a secret. Cross-platform replacement for the bash:
+//   DOCKER_BUILDKIT=1 docker build --secret id=azure_npm_token,env=... -t IMAGE:TAG .
+
+'use strict';
+
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+
+const [, , image, tag = 'dev'] = process.argv;
+if (!image) {
+  console.error('usage: node scripts/docker-build.js <image> [tag]');
+  process.exit(1);
+}
+if (!fs.existsSync('.npmrc')) {
+  console.error('cp .npmrc.example .npmrc and set <org>/<project>/<feed>');
+  process.exit(1);
+}
+if (!process.env.AZURE_NPM_TOKEN) {
+  console.error('export AZURE_NPM_TOKEN=<base64 Azure PAT> first');
+  process.exit(1);
+}
+
+const r = spawnSync(
+  'docker',
+  [
+    'build',
+    '--secret', 'id=azure_npm_token,env=AZURE_NPM_TOKEN',
+    '-t', \`\${image}:\${tag}\`,
+    '.',
+  ],
+  { stdio: 'inherit', env: { ...process.env, DOCKER_BUILDKIT: '1' } },
+);
+process.exit(r.status ?? 1);
+`;
+
 // ── Per-package files ────────────────────────────────────────────────────
 
 const pkgPackageJson = (pkg) => `{
@@ -144,7 +288,7 @@ const pkgPackageJson = (pkg) => `{
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepare": "npm run build",
-    "clean": "rm -rf dist node_modules"
+    "clean": "node scripts/clean.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
@@ -155,43 +299,36 @@ const pkgPackageJson = (pkg) => `{
 
 const pkgMakefile = (pkg) => `PACKAGE := ${pkg}
 
-.PHONY: help install auth build test lint pack publish clean
+${SHELL_DETECT}.PHONY: help install auth build test lint pack publish clean
 
 help:                  ## Show this help
-\t@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-16s %s\\n", $$1, $$2}' $(MAKEFILE_LIST)
+\t@node scripts/help.js
 
 install:               ## Install deps for this package (standalone)
 \tnpm install
 
 auth:                  ## Authenticate npm to the @mis Azure feed (cross-platform)
-\t@test -f .npmrc || { echo "no .npmrc — cp .npmrc.example .npmrc and set <org>/<project>/<feed>"; exit 1; }
-\t@if [ -n "$\${AZURE_NPM_TOKEN:-}" ]; then \\
-\t  echo "auth: AZURE_NPM_TOKEN set — npm reads it from .npmrc (no action needed)"; \\
-\telif uname -s 2>/dev/null | grep -qiE 'mingw|msys|cygwin|windows'; then \\
-\t  vsts-npm-auth -config .npmrc; \\
-\telse \\
-\t  echo "auth: no credentials. Linux/macOS/CI:  export AZURE_NPM_TOKEN=<base64 Azure PAT>"; \\
-\t  echo "      Windows: install vsts-npm-auth, then re-run 'make auth'"; \\
-\t  exit 1; \\
-\tfi
+\t@node scripts/auth.js
 
 build:                 ## Compile TS to dist/
-\trm -rf dist && npx tsc -p tsconfig.json
+\t@node -e "require('fs').rmSync('dist',{recursive:true,force:true})"
+\tnpx tsc -p tsconfig.json
 
 test:                  ## Run tests (stub)
-\t@echo "test: no tests yet for $(PACKAGE)"
+\t@node -e "console.log('test: no tests yet for $(PACKAGE)')"
 
 lint:                  ## Lint (stub)
-\t@echo "lint: not configured yet for $(PACKAGE)"
+\t@node -e "console.log('lint: not configured yet for $(PACKAGE)')"
 
 pack:                  ## Build then npm pack
-\t$(MAKE) build && npm pack
+\t$(MAKE) build
+\tnpm pack
 
 publish: auth build    ## Publish this package to the @mis Azure Artifacts feed
 \tnpm publish --no-workspaces
 
 clean:                 ## Remove artefacts
-\trm -rf dist node_modules *.tgz
+\t@node scripts/clean.js
 `;
 
 function genPkg(repo, pkg, body) {
@@ -205,6 +342,10 @@ function genPkg(repo, pkg, body) {
   // build output / incremental caches.
   write(`${repo}/.gitignore`, GITIGNORE);
   write(`${repo}/src/index.ts`, body + '\n');
+  // Cross-platform helpers the Makefile recipes shell out to.
+  write(`${repo}/scripts/help.js`, SCRIPT_HELP);
+  write(`${repo}/scripts/auth.js`, SCRIPT_AUTH);
+  write(`${repo}/scripts/clean.js`, SCRIPT_CLEAN);
   console.log(`  pkg  ${pkg}`);
 }
 
@@ -559,38 +700,21 @@ const svcMakefile = (domain) => `SERVICE := ${domain}-service
 IMAGE   := mis/$(SERVICE)
 TAG     ?= dev
 
-.PHONY: help install install-standalone install-azure auth dev build start test lint typecheck \\
+${SHELL_DETECT}.PHONY: help install install-standalone install-azure auth dev build start test lint typecheck \\
         prisma-generate prisma-migrate prisma-deploy seed \\
         docker-build clean
 
 help:                  ## Show this help
-\t@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-18s %s\\n", $$1, $$2}' $(MAKEFILE_LIST)
+\t@node scripts/help.js
 
 install:               ## Install deps for this service (standalone)
 \tnpm install
 
 install-standalone:    ## Install deps + @mis/* from GitHub (no package.json edit)
-\tnpm install --no-save \\
-\t  git+https://github.com/muling3/mis-pkg-auth-middleware.git \\
-\t  git+https://github.com/muling3/mis-pkg-audit-logger.git \\
-\t  git+https://github.com/muling3/mis-pkg-error-formatter.git \\
-\t  git+https://github.com/muling3/mis-pkg-metrics.git \\
-\t  git+https://github.com/muling3/mis-pkg-access-control.git \\
-\t  git+https://github.com/muling3/mis-pkg-validation-schemas.git \\
-\t  git+https://github.com/muling3/mis-pkg-circuit-breaker.git \\
-\t  git+https://github.com/muling3/mis-proto.git
+\tnode scripts/install-standalone.js
 
 auth:                  ## Authenticate npm to the @mis Azure feed (cross-platform)
-\t@test -f .npmrc || { echo "no .npmrc — cp .npmrc.example .npmrc and set <org>/<project>/<feed>"; exit 1; }
-\t@if [ -n "$\${AZURE_NPM_TOKEN:-}" ]; then \\
-\t  echo "auth: AZURE_NPM_TOKEN set — npm reads it from .npmrc (no action needed)"; \\
-\telif uname -s 2>/dev/null | grep -qiE 'mingw|msys|cygwin|windows'; then \\
-\t  vsts-npm-auth -config .npmrc; \\
-\telse \\
-\t  echo "auth: no credentials. Linux/macOS/CI:  export AZURE_NPM_TOKEN=<base64 Azure PAT>"; \\
-\t  echo "      Windows: install vsts-npm-auth, then re-run 'make auth'"; \\
-\t  exit 1; \\
-\tfi
+\t@node scripts/auth.js
 
 install-azure: auth    ## Install @mis/* from the Azure Artifacts feed (.npmrc)
 \tnpm install
@@ -614,24 +738,22 @@ typecheck:             ## tsc --noEmit
 \tnpm run typecheck
 
 prisma-generate:       ## STUB — no Prisma schema yet
-\t@echo "prisma-generate: TODO for $(SERVICE)"
+\t@node -e "console.log('prisma-generate: TODO for $(SERVICE)')"
 
 prisma-migrate:        ## STUB
-\t@echo "prisma-migrate: TODO for $(SERVICE)"
+\t@node -e "console.log('prisma-migrate: TODO for $(SERVICE)')"
 
 prisma-deploy:         ## STUB
-\t@echo "prisma-deploy: TODO for $(SERVICE)"
+\t@node -e "console.log('prisma-deploy: TODO for $(SERVICE)')"
 
 seed:                  ## STUB
-\t@echo "seed: TODO for $(SERVICE)"
+\t@node -e "console.log('seed: TODO for $(SERVICE)')"
 
 docker-build:          ## Build Docker image (needs configured .npmrc + AZURE_NPM_TOKEN)
-\t@test -f .npmrc || { echo "cp .npmrc.example .npmrc and set <org>/<project>/<feed>"; exit 1; }
-\t@test -n "$\${AZURE_NPM_TOKEN:-}" || { echo "export AZURE_NPM_TOKEN=<base64 Azure PAT> first"; exit 1; }
-\tDOCKER_BUILDKIT=1 docker build --secret id=azure_npm_token,env=AZURE_NPM_TOKEN -t $(IMAGE):$(TAG) .
+\t@node scripts/docker-build.js $(IMAGE) $(TAG)
 
 clean:                 ## Remove build artefacts
-\trm -rf dist node_modules
+\t@node scripts/clean.js
 `;
 
 const svcDockerfile = (domain, port) => `# syntax=docker/dockerfile:1
@@ -693,6 +815,12 @@ function genService(domain, port, route, perm = 'profile:read') {
   write(`${repo}/Makefile`, svcMakefile(domain));
   // Dockerfile builds from each service's own repo context.
   write(`${repo}/Dockerfile`, svcDockerfile(domain, port));
+  // Cross-platform helpers the Makefile recipes shell out to.
+  write(`${repo}/scripts/help.js`, SCRIPT_HELP);
+  write(`${repo}/scripts/auth.js`, SCRIPT_AUTH);
+  write(`${repo}/scripts/clean.js`, SCRIPT_CLEAN);
+  write(`${repo}/scripts/install-standalone.js`, SCRIPT_INSTALL_STANDALONE);
+  write(`${repo}/scripts/docker-build.js`, SCRIPT_DOCKER_BUILD);
 
   console.log(`  svc  ${repo} (:${port})`);
 }
