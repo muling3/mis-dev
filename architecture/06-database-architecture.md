@@ -473,8 +473,35 @@ datasource db {
 | Command | Purpose |
 |---------|---------|
 | `make prisma-generate` | Regenerate the type-safe client |
-| `make prisma-migrate` | `prisma migrate dev` — create + apply locally |
-| `make prisma-deploy` | `prisma migrate deploy` — non-dev environments / CI |
+| `make prisma-migrate` | Ensure the service's schema exists, then `prisma migrate dev` (local) |
+| `make prisma-deploy` | Ensure the service's schema exists, then `prisma migrate deploy` (CI / prod) |
+
+### Per-schema migration isolation
+
+Each service runs its own migrations independently, with no risk of conflicting with a peer service that runs `prisma migrate` at the same time. The guarantee comes from how Prisma stores its history table:
+
+> **Prisma writes its `_prisma_migrations` history table inside the schema named in `?schema=<name>` on the connection URL.** With schema-per-service, `auth._prisma_migrations`, `cases._prisma_migrations`, etc., are *physically different tables*. They don't share rows, locks, or sequences.
+
+| Service | DB | Schema | History table |
+|---------|----|--------|---------------|
+| `mis-auth-service` | `mis_core` | `auth` | `mis_core.auth._prisma_migrations` |
+| `mis-registration-service` | `mis_core` | `registration` | `mis_core.registration._prisma_migrations` |
+| `mis-case-service` | `mis_core` | `cases` | `mis_core.cases._prisma_migrations` |
+| `mis-admin-service` | `mis_core` | `cam` (+ `audit_refs`) | `mis_core.cam._prisma_migrations` |
+
+Concrete consequence: a developer running `make prisma-migrate` in `mis-case-svc` while another runs the same in `mis-auth-svc` cannot interfere with each other. The Postgres catalog (`pg_class` etc.) takes brief shared locks during DDL, which Postgres handles natively — there is no application-level coordination to get wrong.
+
+### Per-service bootstrap (chicken-and-egg)
+
+Prisma cannot create `_prisma_migrations` inside a schema that doesn't exist yet, so each service's `make prisma-migrate` runs a tiny `CREATE SCHEMA IF NOT EXISTS` step *before* invoking Prisma:
+
+```make
+prisma-migrate:
+	@node scripts/ensure-schema.js
+	npx prisma migrate dev
+```
+
+`scripts/ensure-schema.js` parses `?schema=` from `DIRECT_DATABASE_URL` (or `DATABASE_URL`), connects with the `pg` driver, and runs `CREATE SCHEMA IF NOT EXISTS`. Services that own more than one schema (e.g. `mis-admin-service`: `cam` + `audit_refs`) set `EXTRA_SCHEMAS=audit_refs` in `.env` and the script creates both. This keeps schema provisioning a property of the service that owns the schema — `mis-dev` doesn't need to know which schemas exist, consistent with the "one repo per service" model.
 
 ### Migration workflow
 

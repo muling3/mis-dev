@@ -18,7 +18,7 @@ Infra UIs / endpoints:
   Kong proxy    http://localhost:8000
   Kong admin    http://localhost:8001
   Kong metrics  http://localhost:8100/metrics
-  Postgres      localhost:5432   (user mis / pass mis, db mis_dev)
+  Postgres      localhost:5432   (user mis / pass mis, db mis_core; schemas auth, registration, cases, cam, audit_refs)
   Mongo         localhost:27017  (replica set rs0)
   Redis         localhost:6379
   Kafka         localhost:29092  (PLAINTEXT_HOST listener)

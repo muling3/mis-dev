@@ -9,7 +9,10 @@ services:
     environment:
       POSTGRES_USER: mis
       POSTGRES_PASSWORD: mis
-      POSTGRES_DB: mis_dev
+      # Single shared DB per arch §3; each service owns a logical schema
+      # (auth, registration, cases, cam, audit_refs) inside it. Each service
+      # creates its own schema via `make prisma-migrate` (scripts/ensure-schema.js).
+      POSTGRES_DB: mis_core
     ports: ["5432:5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
