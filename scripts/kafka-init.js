@@ -20,6 +20,11 @@ const TOPICS = [
   'mis.cases.sla',
   'mis.applications',
   'mis.documents',
+  // Document-upload workflow: per-stage progress events + final verdict,
+  // emitted by Sandbox Service and consumed by Document Service. See
+  // architecture/document-upload-workflow.md.
+  'mis.documents.scan-progress',
+  'mis.documents.verdict',
   'mis.notifications',
   'mis.sandbox.verdicts',
 ];

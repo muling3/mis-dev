@@ -1,7 +1,7 @@
 # MIS repositories — one git repo per service / package.
 # Format:  <name>  <clone-url>     (used by `make repos`)
 
-# Orchestrator (infra + Kong + docs + scaffold) — this repo
+# Orchestrator (infra + Kong + docs) — this repo
 mis-dev                     https://github.com/muling3/mis-dev.git
 
 # Services (NestJS) — port shown in mis-dev/docs/urls.txt

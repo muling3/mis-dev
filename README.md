@@ -2,9 +2,9 @@
 
 **One git repo per service / package.** `mis-dev` is *not* a monorepo root —
 it provides the shared **infra** (Postgres, Mongo, Redis, Kafka), the **Kong**
-API gateway, the **architecture docs** (`architecture/`), and the **scaffold
-generator**. You clone `mis-dev` once for infra, and separately clone the one
-service repo you're working on.
+API gateway, and the **architecture docs** (`architecture/`). You clone
+`mis-dev` once for infra, and separately clone the one service repo you're
+working on.
 
 `make help` lists every target. `make repos` lists every repo + clone URL.
 
@@ -92,9 +92,6 @@ own git remote, own `.gitignore`, self-contained `tsconfig.json`
 (`install`, `install-standalone`, `install-azure`, `auth`, `dev`, `build`,
 `start`, `test`, `lint`, `typecheck`, `docker-build`, `prisma-*`, `clean`;
 packages also `pack`/`publish`).
-
-`make scaffold` regenerates the *entire* set of repos into the parent
-directory — offline bootstrap / recovery only; normally you clone individually.
 
 ## Infra & Kong
 

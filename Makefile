@@ -2,7 +2,7 @@
 #
 # Model: ONE repo per service / package (see `make repos`). mis-dev is NOT a
 # monorepo root — it provides the shared infra (Postgres/Mongo/Redis/Kafka),
-# the Kong API gateway, the architecture docs, and the scaffold generator.
+# the Kong API gateway, and the architecture docs.
 #
 # A developer:
 #   1. clones mis-dev, runs `make infra-up`            (infra + Kong, once)
@@ -31,7 +31,7 @@ COMPOSE := docker compose -f docker/docker-compose.yml
 
 .PHONY: help infra-up infra-down infra-ps infra-logs reset \
         kafka-init kong-reload kong-token kong-metrics \
-        urls repos scaffold clone-all dev up-all down-all
+        urls repos clone-all dev up-all down-all
 
 help:                  ## Show this help
 	@node scripts/help.js
@@ -74,9 +74,6 @@ urls:                  ## Print local URLs cheat-sheet
 
 repos:                 ## List every MIS repo + its clone URL
 	@node scripts/repos.js
-
-scaffold:              ## (Re)generate ALL service & package repos into ../ (recovery/offline)
-	node scripts/scaffold.js
 
 # ── Working with the actual repos (cloned next to mis-dev) ─────
 clone-all:             ## Clone every repo into ../ (override REPO_URLS="a,b,c")

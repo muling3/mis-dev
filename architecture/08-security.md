@@ -644,29 +644,80 @@ The Sandbox Service runs untrusted submissions; it is the most constrained workl
 | Kernel | AppArmor profile restricting syscall surface |
 | Filesystem | Ephemeral emptyDir, capped size |
 | Submission | gRPC ingress from Document Service only |
-| Results | gRPC egress to general workers only |
+| Verdict delivery | Kafka topic `mis.documents.verdict` (durable, at-least-once); `SandboxService.GetVerdict` gRPC remains as a reaper fallback |
+| Progress delivery | Kafka topic `mis.documents.scan-progress` — per-stage UX events (`submitted` → `cuckoo` → `clamav` → `yara` → `suricata` → `aggregating` → `done`). Fire-and-forget; the Document Service updates `scan_stage` so polling reflects live progress |
+| Cuckoo report storage | MongoDB collection `cuckoo_reports` in the `mis-sandbox` namespace replica set; sandbox-namespace SA is the only writer (see [schema.dbml](./schema.dbml) → `mongo.cuckoo_reports`) |
+| Cuckoo runtime | Container `blacktop/cuckoo:2.0.7` in production; opt-in locally via `docker compose --profile cuckoo up cuckoo`. Sandbox Service talks to it via Cuckoo's REST API on `:8090`; falls back to an in-process deterministic mock when `CUCKOO_URL` is unset (e.g. on a host without `/dev/kvm`) |
 
-Workflow:
+### 12.1 Quarantine-first workflow
+
+Every upload is held in a **quarantine** bucket and is only promoted to the canonical, envelope-encrypted store **after** the Sandbox returns `SAFE`. A malicious blob therefore never lands in production storage. See [document-upload-workflow.md](./document-upload-workflow.md) for the full end-to-end sequence; the high-level shape is:
 
 ```
-User uploads file
-   │
-   ▼
-Document Service stores blob in S3 (envelope encrypted)
-   │
-   ▼
-Document Service → Sandbox Service (gRPC stream)
-   │
-   ▼
-Sandbox spawns isolated scan pod on sandbox node
-   │
-   ▼ Cuckoo + ClamAV + YARA + Suricata
-   │
-Verdict (SAFE | SUSPICIOUS | MALICIOUS)
-   │
-   ▼
-gRPC back to general workers + Kafka mis.reporting.events
+Client ─► Kong ─► Document Service
+                       │
+                       │ (1) hash + pre-flight checks
+                       │ (2) stream bytes ─► quarantine S3   (NOT envelope-encrypted)
+                       │ (3) insert document row, status=PENDING_SCAN
+                       │ (4) 202 Accepted to client
+                       ▼
+              Sandbox Service ─ gRPC stream from Document only
+                       │
+                       ▼  (ephemeral pod on tainted sandbox node)
+              Cuckoo + ClamAV + YARA + Suricata  (parallel fan-out)
+                       │
+                       │ persist full report → mongo.cuckoo_reports
+                       ▼
+        Kafka mis.documents.verdict  (verdict + per-scanner detail)
+                       │
+                       ▼
+              Document Service consumer
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+      SAFE        SUSPICIOUS       MALICIOUS
+        │              │              │
+        │              │              ├─► append SHA-256 to bad-hash blocklist
+        │              │              ├─► move blob → mis-documents-forensics (legal hold)
+        │              │              ├─► UPDATE doc_status=BLOCKED, sandbox_classification=MALICIOUS
+        │              │              ├─► Kafka mis.notifications (EMAIL to submitter + page security)
+        │              │              └─► hash-chained audit event (SEV-1)
+        │              │
+        │              └─► UPDATE doc_status=QUARANTINED, open review ticket (Admin Service)
+        │
+        ├─► Vault Transit datakey/plaintext/documents-kek
+        ├─► AES-256-CBC(DEK, bytes) → canonical bucket
+        ├─► persist wrapped DEK on document row, doc_status=ACTIVE
+        └─► delete quarantine blob
 ```
+
+### 12.2 Persisting the Cuckoo report
+
+The Sandbox Service writes the full per-submission report to MongoDB **before** publishing the verdict, so every consumer (Document Service, Admin Service auditors, IR analysts) can fetch the evidence by `cuckoo_task_id`. The collection is defined in [schema.dbml](./schema.dbml):
+
+| Field | Source |
+|-------|--------|
+| `cuckoo_task_id` | Cuckoo's per-submission task identifier (also stamped on `mongo.documents.cuckoo_task_id` so a document row joins to its report) |
+| `document_id` | Echoed from `SubmissionMetadata.document_id` |
+| `submitted_at` / `completed_at` | Sandbox bookends |
+| `classification` | `SAFE \| SUSPICIOUS \| MALICIOUS` |
+| `signatures` | Cuckoo signature hits (JSON array) |
+| `network_iocs` | Aggregated from Cuckoo PCAP analysis + Suricata alerts |
+| `file_iocs` | Dropped-file hashes, registry writes, mutexes |
+| `raw_report` | Full Cuckoo JSON, 1–10 MB typical — retained for forensics |
+
+The `documents` collection (owned by the Document Service) carries the **verdict summary**: `sandbox_classification`, `cuckoo_task_id`, `clamav_result`, `yara_matches[]`, `suricata_alerts[]`. That keeps the hot read path (status checks, listings) cheap, while the heavy raw report stays in the sandbox-namespace collection behind a stricter access boundary.
+
+### 12.3 Notifying the submitter on a MALICIOUS verdict
+
+The Document Service emits a `mis.notifications` event (channel `EMAIL`, template `document-rejected-malicious`) which the Notification Service renders and sends via SMTP. The body is **sanitised** — it never reveals scanner IOCs, only that the file failed security checks and how to contact support.
+
+| Environment | SMTP target |
+|-------------|-------------|
+| Local dev | **MailDev** (`maildev:1025` from inside Compose, `localhost:1025` from the host); inspect captured mail at `http://localhost:1080` |
+| Staging / Prod | Tenant SMTP relay; credentials in `secret/notification/smtp` (Vault KV v2) |
+
+MailDev is wired into `mis-dev/docker/docker-compose.yml` so the malicious-path flow can be exercised end-to-end on a laptop without any outbound email leaving the network. See [document-upload-workflow.md §8](./document-upload-workflow.md#8-post-verdict-actions) for the full notification payload and case-timeline write-back.
 
 ## 13. Auditing & Tamper-Evidence
 

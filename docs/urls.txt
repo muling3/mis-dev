@@ -12,8 +12,7 @@ Run a service from its OWN repo clone (`make dev` there); Kong routes to it:
   Document      http://localhost:3007/api/documents/health     http://localhost:8000/api/documents/health
   Admin         http://localhost:3008/api/admin/health         http://localhost:8000/api/admin/health
 
-  (3006 is unassigned — the reporting service was retired; scaffold can
-   regenerate it if needed.)
+  (3006 is unassigned — the reporting service was retired.)
 
 Infra UIs / endpoints:
   Kong proxy    http://localhost:8000
@@ -23,6 +22,9 @@ Infra UIs / endpoints:
   Mongo         localhost:27017  (replica set rs0)
   Redis         localhost:6379
   Kafka         localhost:29092  (PLAINTEXT_HOST listener)
+  MailDev SMTP  localhost:1025   (point SMTP_HOST/SMTP_PORT here in dev)
+  MailDev UI    http://localhost:1080  (every captured email)
+  Cuckoo REST   http://localhost:8090  (sandbox-svc polls; only up with `--profile cuckoo`, needs /dev/kvm)
 
 Notes:
   - Kong reaches host services via host.docker.internal (host-gateway

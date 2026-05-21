@@ -66,6 +66,56 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     ports: ["29092:29092"]
 
+  # Cuckoo Sandbox — community Docker image (`blacktop/cuckoo`). Profile-gated
+  # because Cuckoo's behavioural analysis spins up a Windows/Linux VM via KVM,
+  # which needs nested-virt + /dev/kvm on the host. On laptops without KVM the
+  # container will start and accept submissions, but VM-based dynamic analysis
+  # will fail — the sandbox-svc PoC has a deterministic fallback for that case.
+  #
+  # Bring up with:    docker compose --profile cuckoo up -d cuckoo
+  # Web UI:           http://localhost:8090   (Cuckoo's REST + UI port)
+  # REST API base:    http://localhost:8090   (sandbox-svc polls /tasks/* here)
+  #
+  # The sandbox-svc reads CUCKOO_URL from its env (defaults to this URL when
+  # the profile is active; falls back to in-process mock otherwise).
+  cuckoo:
+    image: blacktop/cuckoo:2.0.7
+    profiles: ["cuckoo"]
+    privileged: true            # required for KVM passthrough
+    devices:
+      - "/dev/kvm:/dev/kvm"     # nested-virt for the analysis VM
+    ports:
+      - "8090:8090"             # Cuckoo REST API + Web UI
+      - "2042:2042"             # Cuckoo result server (agent → host)
+    volumes:
+      - cuckoo_storage:/cuckoo/storage
+    environment:
+      CUCKOO_API_HOST: 0.0.0.0
+      CUCKOO_API_PORT: 8090
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8090/cuckoo/status"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+
+  # Local SMTP catcher. Notification Service points at maildev:1025 in dev so
+  # outbound mail (e.g. "Your document was rejected" on a MALICIOUS Cuckoo
+  # verdict) never leaves the laptop. Inspect every captured message at
+  # http://localhost:1080.
+  maildev:
+    image: maildev/maildev:2.1.0
+    environment:
+      MAILDEV_INCOMING_USER: ""
+      MAILDEV_INCOMING_PASS: ""
+    ports:
+      - "1025:1025"   # SMTP — point SMTP_HOST/SMTP_PORT at this from the host
+      - "1080:1080"   # Web UI
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:1080"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   kong:
     image: kong:3.5
     environment:
@@ -88,3 +138,4 @@ services:
 volumes:
   pgdata:
   mongodata:
+  cuckoo_storage:
