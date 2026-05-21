@@ -88,7 +88,13 @@ services:
     routes:
       - name: case-public
         strip_path: false
-        paths: ["/api/cases/health", "/api/cases/ready"]
+        # /api/cases/test-upload is an operator-driven PoC driver that
+        # exercises the full document-upload workflow end-to-end. Public
+        # for demo convenience; prefix matches the dynamic status sub-path.
+        paths:
+          - /api/cases/health
+          - /api/cases/ready
+          - /api/cases/test-upload
       - name: case
         strip_path: false
         paths: ["/api/cases"]
